@@ -21,6 +21,7 @@
     T11  drain a whole data zone under load: service continues, quorum zone unused
     T12  NetworkPolicy: only labelled clients reach PostgreSQL
     T13  backup, simulated loss, restore: dashboard is back
+    T14  no pod of the namespace (jobs and test pods included) in the quorum zone
 
   Everything it creates lives in the kind cluster. It changes nothing else.
   Results: tests\local\out\results.txt   Full log: tests\local\out\run-test.log
@@ -531,10 +532,36 @@ foreach ($n in $zoneNodes) { Exec 'kubectl' @('--context', $Ctx, 'uncordon', $n)
 # T12 NetworkPolicy on PostgreSQL
 function Probe-Postgres([string]$PodName, [string]$Labels) {
     K @('delete', 'pod', $PodName, '--ignore-not-found', '--wait=true') | Out-Null
-    $a = @('run', $PodName, '--restart=Never', '--image=docker.io/library/postgres:18')
-    if ($Labels) { $a += "--labels=$Labels" }
-    $a += @('--command', '--', 'pg_isready', '-h', 'grafana-postgresql', '-p', '5432', '-t', '8')
-    K $a | Out-Null
+    # Probe pod pinned to the data zones like every other workload (no quorum zone).
+    $labelLines = ''
+    if ($Labels) {
+        foreach ($kv in ($Labels -split ',')) { $k, $v = $kv -split '=', 2; $labelLines += "`n    ${k}: `"$v`"" }
+    }
+    $zones = ($DataZones | ForEach-Object { "`n                  - $_" }) -join ''
+    $yaml = @"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $PodName
+  labels:
+    app.kubernetes.io/name: np-probe$labelLines
+spec:
+  restartPolicy: Never
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: topology.kubernetes.io/zone
+                operator: In
+                values:$zones
+  containers:
+    - name: probe
+      image: docker.io/library/postgres:18
+      command: ["pg_isready", "-h", "grafana-postgresql", "-p", "5432", "-t", "8"]
+"@
+    $r = ($yaml | & kubectl --context $Ctx -n $Ns apply -f - 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    Add-Content -Path $LogFile -Value "> probe pod $PodName : $r" -Encoding UTF8
     Wait-Until {
         $p = KJson @('get', 'pod', $PodName)
         $p -and ($p.status.phase -eq 'Succeeded' -or $p.status.phase -eq 'Failed')
@@ -580,6 +607,16 @@ if ($bk.Code -ne 0 -or $bkLog -notmatch 'backup written') {
     }
     K @('delete', 'job', 'grafana-db-restore', '--ignore-not-found') | Out-Null
 }
+
+# T14 standing rule: no workload of this namespace ever ran in the quorum zone
+$allPods = KJson @('get', 'pods')
+$inQuorum = @()
+if ($allPods) {
+    $inQuorum = @($allPods.items | Where-Object { $_.spec.nodeName -and $zoneOf[$_.spec.nodeName] -eq $QuorumZone } | ForEach-Object { $_.metadata.name })
+}
+$total = 0; if ($allPods) { $total = @($allPods.items).Count }
+if ($inQuorum.Count -eq 0) { Result 'T14' 'quorum zone empty' 'PASS' "0 of $total pods in namespace $Ns ran in $QuorumZone" }
+else { Result 'T14' 'quorum zone empty' 'FAIL' "pods in ${QuorumZone}: $($inQuorum -join ', ')" }
 
 # --- Wrap up -------------------------------------------------------------------
 Collect-Diagnostics

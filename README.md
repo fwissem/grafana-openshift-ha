@@ -30,8 +30,9 @@ PostgreSQL, so any Grafana pod can be deleted at any time without losing anythin
 | Secrets | Created on the cluster from a local, untracked file. Never in Git |
 
 Zones: the cluster has two data zones and a third zone that only provides
-quorum. Grafana, PostgreSQL and the backup jobs are pinned to the two data zones
-by node affinity; the zone names are set in `values-local.yaml` and the overlay.
+quorum. **No workload runs in the quorum zone**: Grafana, PostgreSQL, the
+backup and restore jobs (and any component added later) are pinned to the two
+data zones by node affinity; the zone names are set in `values-local.yaml` and the overlay.
 
 Known limit, by design: PostgreSQL is a single instance on a replicated volume.
 Losing its node means a short Grafana interruption while the pod is rescheduled,
@@ -152,6 +153,7 @@ powershell -ExecutionPolicy Bypass -File D:\grafana-openshift-ha\tests\local\run
 | T11 | a whole data zone drained while clients poll: service continues, quorum zone stays unused |
 | T12 | only labelled clients reach PostgreSQL |
 | T13 | backup, dashboard deleted, database restored, dashboard back |
+| T14 | no pod of the namespace, jobs and test pods included, ever ran in the quorum zone |
 
 Results go to `tests\local\out\results.txt` (git-ignored). Options:
 `-Recreate` (fresh cluster), `-SkipDeploy` (tests only), `-Destroy` (delete the cluster).
