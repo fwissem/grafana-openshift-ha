@@ -82,7 +82,7 @@ c=0
 for p in "$DIR"/folder-permissions/*.json; do
   [ -e "$p" ] || continue
   uid="$(basename "$p" .json)"
-  roles="$(jq -c '[.[] | select((.role // "") != "") | {role, permission}]' "$p")"
+  roles="$(jq -c '[.[] | select((.role // "") != "" and ((.inherited // false) | not)) | {role, permission}]' "$p")"
   others="$(jq '[.[] | select((.userId // 0) > 0 or (.teamId // 0) > 0)] | length' "$p")"
   [ "$others" -eq 0 ] || warn "folder $uid: $others user/team permission(s) not imported (recreate them by hand)"
   if [ "$APPLY" = 1 ]; then

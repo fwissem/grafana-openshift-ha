@@ -28,6 +28,8 @@ metadata:
 spec:
   schedule: "15 1 * * *"
   timeZone: Etc/UTC
+  # Still run a missed backup if the controller comes back within an hour.
+  startingDeadlineSeconds: 3600
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -93,7 +95,11 @@ spec:
                   set -eu
                   ts="$(date -u +%Y%m%d-%H%M%S)"
                   out="/backup/grafana-${ts}.dump"
+                  # Leftovers of an interrupted run would fill the volume.
+                  rm -f /backup/*.tmp
                   pg_dump --format=custom --no-owner --file="${out}.tmp"
+                  # Keep the dump only if pg_restore can read its table of contents.
+                  pg_restore --list "${out}.tmp" > /dev/null
                   mv "${out}.tmp" "${out}"
                   echo "backup written: ${out} ($(wc -c < "${out}") bytes)"
                   # Retention by count; coreutils only (no find/xargs in the image).

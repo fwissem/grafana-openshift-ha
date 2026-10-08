@@ -28,6 +28,9 @@ gapi_init() {
     local user="${GRAFANA_USER:-admin}" pass
     read -r -s -p "Password for $user on $GAPI_URL: " pass; echo
     [ -n "$pass" ] || die "empty password"
+    # The old instance's password may contain quotes or backslashes: escape them
+    # for the curl config file.
+    pass="${pass//\\/\\\\}"; pass="${pass//\"/\\\"}"
     printf 'user = "%s:%s"\n' "$user" "$pass" >> "$GAPI_CFG"
   fi
   if [ -n "${GRAFANA_CACERT:-}" ]; then
@@ -52,5 +55,5 @@ gapi() {
   local args=(-K "$GAPI_CFG" -X "$method" -o "$out" -w '%{http_code}' -H 'Accept: application/json')
   if [ -n "$body" ]; then args+=(-H 'Content-Type: application/json' --data-binary "@$body"); fi
   if [ -n "$extra" ]; then args+=(-H "$extra"); fi
-  curl "${args[@]}" "$GAPI_URL$path" || printf '000'
+  curl "${args[@]}" "$GAPI_URL$path" || true   # curl prints 000 itself on failure
 }

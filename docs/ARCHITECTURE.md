@@ -34,7 +34,7 @@ follows its volume.
 | Concern | Design |
 |---|---|
 | State | PostgreSQL holds dashboards, folders, users, permissions, alert rules and sessions. The Grafana pods keep nothing: `/var/lib/grafana` is an emptyDir used as a cache. |
-| Grafana availability | There are 4 replicas, 2 per data zone (soft spread) and at most one per node (hard rule). A PodDisruptionBudget allows one pod down at a time, rolling updates use `maxUnavailable: 0`, and each pod waits 10 seconds before stopping so the router can drain it. |
+| Grafana availability | There are 4 replicas, 2 per data zone (soft spread), spread evenly over the nodes with a hard max skew of 1, so one per node while there are enough nodes. Liveness uses `/healthz` and readiness `/api/health`, so a database outage takes the replicas out of the Route without restarting them. A PodDisruptionBudget allows one pod down at a time, rolling updates use `maxUnavailable: 0`, and each pod waits 10 seconds before stopping so the router can drain it. |
 | PostgreSQL availability | A single instance runs on a volume that the storage layer replicates. If its node fails, the pod restarts on another node with the same data. It has no PodDisruptionBudget, so it never blocks a node drain during a cluster upgrade. |
 | Zones | Every workload has a required node affinity to the two data zones. Nothing from this project runs in the quorum zone. |
 | Alerting | Unified alerting runs in HA mode. The replicas share silences and notification state through the headless service, with gossip on port 9094. |

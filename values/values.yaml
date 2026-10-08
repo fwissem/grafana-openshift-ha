@@ -61,9 +61,14 @@ deploymentStrategy:
 
 podDisruptionBudget:
   maxUnavailable: 1
+  # A pod that is not ready (for example during a database outage) can still be
+  # evicted, so it never blocks a node drain.
+  unhealthyPodEvictionPolicy: AlwaysAllow
 
 # Even split over the data zones (soft, so a lost zone never blocks
-# rescheduling into the other one) and one replica per node (hard).
+# rescheduling into the other one) and an even split over the nodes (hard,
+# max skew 1: one replica per node while there are enough nodes, two per node
+# when a zone is lost).
 # Only nodes allowed by the affinity above are counted (the quorum zone is
 # ignored), and tainted nodes (control plane, cordoned nodes) are not counted
 # either, otherwise they would block the hostname spread.
@@ -103,6 +108,27 @@ startupProbe:
     port: grafana
   periodSeconds: 10
   failureThreshold: 60
+
+# Readiness checks the database (/api/health returns 503 when it is down), so
+# a replica without database access leaves the Route.
+readinessProbe:
+  httpGet:
+    path: /api/health
+    port: grafana
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Liveness only checks that the process answers (/healthz). If it used
+# /api/health, a PostgreSQL restart would make Kubernetes restart every replica
+# and leave them in CrashLoopBackOff after the database is back.
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: grafana
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
 
 resources:
   requests:
@@ -216,7 +242,10 @@ grafana.ini:
 
   auth:
     disable_login_form: false    # keeps the local break-glass admin usable
-    oauth_auto_login: false
+    # Group membership is read at login only: limit how long a session lasts so
+    # a user removed from a group loses the role within a day.
+    login_maximum_lifetime_duration: 24h
+    login_maximum_inactive_lifetime_duration: 8h
 
   # Read-only access without login, on the main organisation. What anonymous
   # users see is governed by folder permissions granted to the Viewer role.

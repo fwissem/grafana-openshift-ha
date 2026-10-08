@@ -20,8 +20,9 @@ jobs:
   lint:
     name: Shell and YAML lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
@@ -37,21 +38,23 @@ jobs:
   secrets:
     name: Secret scan
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   render:
     name: Render manifests and chart
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
       - name: kustomize build (kind and OpenShift overlays)
         run: |
           kubectl kustomize manifests/overlays/kind > /tmp/kind.yaml
@@ -68,8 +71,15 @@ jobs:
           helm template grafana charts/grafana -n grafana \
             -f values/values.yaml -f tests/local/values-kind.yaml -f tests/local/values-test-datasources.yaml > /tmp/grafana-kind.yaml
           grep -c '^kind:' /tmp/grafana.yaml /tmp/grafana-kind.yaml
+      - name: no fixed UID or GID in the OpenShift render (restricted-v2 SCC)
+        run: |
+          if grep -nE 'runAsUser|runAsGroup|fsGroup' /tmp/grafana.yaml /tmp/openshift.yaml /tmp/restore.yaml; then
+            echo "fixed UID/GID found in an OpenShift manifest"; exit 1
+          fi
       - name: validate against Kubernetes schemas (kubeconform)
         run: |
-          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
-          ./kubeconform -strict -summary -ignore-missing-schemas -skip Route,ServiceMonitor,PrometheusRule \
+          curl -sSLo kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          echo "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73  kubeconform.tar.gz" | sha256sum -c -
+          tar xzf kubeconform.tar.gz kubeconform
+          ./kubeconform -strict -summary -kubernetes-version 1.31.0 -ignore-missing-schemas -skip Route,ServiceMonitor,PrometheusRule \
             /tmp/kind.yaml /tmp/openshift.yaml /tmp/restore.yaml /tmp/grafana.yaml /tmp/grafana-kind.yaml

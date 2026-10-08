@@ -34,10 +34,11 @@ while [ $# -gt 0 ]; do
     *) die "unknown argument: $1" ;;
   esac
 done
-need_tools oc curl base64 grep
+need_tools oc curl base64 grep jq
 check_line_endings
 load_env "${ENV_ARG:-$LOCAL_DIR/deploy.env}"
 check_cluster
+need_node_read
 
 REPORT="$LOCAL_DIR/acceptance-$(date +%Y%m%d-%H%M%S).txt"
 URL="https://$ROUTE_HOST"
@@ -58,9 +59,20 @@ CURL=(curl -sS --cacert "$TMP/ca.crt" --connect-timeout 5 --max-time 20)
 api() {  # api <METHOD> <path> [json-body]
   local extra=()
   [ -n "${3:-}" ] && extra=(-H 'Content-Type: application/json' --data-binary "$3")
-  "${CURL[@]}" -K "$TMP/admin.cfg" -o "$TMP/body" -w '%{http_code}' -X "$1" "${extra[@]}" "$URL$2" || printf '000'
+  "${CURL[@]}" -K "$TMP/admin.cfg" -o "$TMP/body" -w '%{http_code}' -X "$1" "${extra[@]}" "$URL$2" || true   # curl prints 000 itself on failure
 }
-anon() { "${CURL[@]}" -o "$TMP/body" -w '%{http_code}' "$URL$1" || printf '000'; }
+anon() { "${CURL[@]}" -o "$TMP/body" -w '%{http_code}' "$URL$1" || true; }
+
+# On any exit: stop the load loop, remove the test content and probe pods, then
+# the private temp directory.
+LOAD_PID=""
+cleanup() {
+  [ -z "$LOAD_PID" ] || kill "$LOAD_PID" 2>/dev/null || true
+  for f in acc-shared-f acc-restricted-f; do api DELETE "/api/folders/$f?forceDeleteRules=true" >/dev/null 2>&1 || true; done
+  ocn delete pod acc-probe-unlabelled acc-probe-labelled --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  rm -rf "$SECURE_TMP"
+}
+trap cleanup EXIT
 
 ready_pods() { ocn get pods -l "$SEL" -o jsonpath='{range .items[?(@.status.containerStatuses[0].ready==true)]}{.metadata.name}{" "}{.spec.nodeName}{"\n"}{end}' | grep -c . || true; }
 wait_ready() {  # wait_ready <seconds>
@@ -110,7 +122,7 @@ else result A02 WARN "uneven split: $dist"; fi
 
 # A03
 api GET /api/admin/settings >/dev/null
-dbtype="$(grep -o '"type":"[a-z0-9]*"' "$TMP/body" | head -n 1 | cut -d'"' -f4)"
+dbtype="$(jq -r '.database.type // empty' "$TMP/body" 2>/dev/null || true)"
 pvcs="$(ocn get pvc -l "$SEL" --no-headers 2>/dev/null | wc -l)"
 [ "$dbtype" = postgres ] && [ "$pvcs" -eq 0 ] && result A03 PASS "database=postgres, no Grafana PVC" || result A03 FAIL "database=$dbtype, Grafana PVCs=$pvcs"
 
@@ -171,7 +183,7 @@ else result A09 FAIL "requests ok=$LOAD_OK failed=$LOAD_FAIL"; fi
 # A10 all pods of one data zone at once (the zone without PostgreSQL)
 lost="${DATA_ZONE_LIST[0]}"; [ "$lost" = "$pgz" ] && lost="${DATA_ZONE_LIST[1]}"
 victims="$(ocn get pods -l "$SEL" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.nodeName}{"\n"}{end}' \
-  | while read -r p nd; do [ "$(zone_of "$nd")" = "$lost" ] && echo "$p"; done)"
+  | while read -r p nd; do if [ "$(zone_of "$nd")" = "$lost" ]; then echo "$p"; fi; done)"
 load_start 90; sleep 10
 # shellcheck disable=SC2086
 [ -n "$victims" ] && ocn delete pod $victims --wait=false >/dev/null
@@ -195,6 +207,7 @@ metadata:
 $2
 spec:
   restartPolicy: Never
+  securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
   affinity:
     nodeAffinity:
       requiredDuringSchedulingIgnoredDuringExecution:
@@ -224,7 +237,7 @@ else result A11 FAIL "unlabelled: '$denied' / labelled: '$allowed'"; fi
 # A12 backup now
 job="acc-backup-$(date +%Y%m%d%H%M%S)"
 ocn create job "$job" --from=cronjob/grafana-db-backup >/dev/null
-if ocn wait --for=condition=complete "job/$job" --timeout=15m >/dev/null 2>&1 && ocn logs "job/$job" | grep -q 'backup written'; then
+if wait_job "$job" 900 && ocn logs "job/$job" | grep -q 'backup written'; then
   result A12 PASS "backup job succeeded: $(ocn logs "job/$job" | grep 'backup written' | sed 's#.*/##')"
 else result A12 FAIL "backup job failed: $(ocn logs "job/$job" 2>&1 | tail -n 3 | tr '\n' ' ')"; fi
 ocn delete job "$job" --ignore-not-found >/dev/null
@@ -244,11 +257,8 @@ fi
 
 # A14 nothing of the namespace outside the data zones
 outside_pods="$(ocn get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.nodeName}{"\n"}{end}' \
-  | while read -r p nd; do [ -n "$nd" ] && ! is_data_zone "$(zone_of "$nd")" && echo "$p"; done || true)"
+  | while read -r p nd; do if [ -n "$nd" ] && ! is_data_zone "$(zone_of "$nd")"; then echo "$p"; fi; done)"
 [ -z "$outside_pods" ] && result A14 PASS "no pod of $NAMESPACE outside the data zones" || result A14 FAIL "outside the data zones: $outside_pods"
-
-# Cleanup of the test content
-for f in acc-shared-f acc-restricted-f; do api DELETE "/api/folders/$f?forceDeleteRules=true" >/dev/null; done
 
 echo "PASS $PASS  WARN $WARN  FAIL $FAIL" | tee -a "$REPORT"
 log "Report: $REPORT (no secret inside)"

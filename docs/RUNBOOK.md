@@ -31,7 +31,14 @@ scripts/collect-facts.sh target -n <new-ns>     --kubeconfig <kubeconfig-of-targ
 
 Open `local/deploy.env.generated`. Keep only the two data zones in
 `DATA_ZONES`, set the storage class and the group names, then move it into
-place:
+place.
+
+Pick storage classes with `volumeBindingMode: WaitForFirstConsumer`. With
+`Immediate`, a volume can be created in the quorum zone, where the PostgreSQL
+pod is not allowed to run, and the pod stays Pending. If the storage replicates
+volumes (Portworx, for example), restrict its replicas to the two data zones as
+well. Choose the size carefully: Kubernetes does not let you change the storage
+class or size of the PostgreSQL volume template after the first install.
 
 ```bash
 mv local/deploy.env.generated local/deploy.env
@@ -100,7 +107,9 @@ shared folders in a private browser window to confirm they load without a login.
    `scripts/create-secrets.sh --apply --refresh-tokens`.
 3. Run `scripts/install.sh --check`, then `scripts/install.sh --apply`.
 
-The replicas restart one at a time and the dashboards stay as they are.
+The replicas restart one at a time and the dashboards stay as they are. A new
+token also restarts them: `install.sh` tracks the version of the token secret
+in a pod annotation.
 
 ### Upgrade Grafana or the chart
 
@@ -123,6 +132,14 @@ Those dumps stay on a volume in the same cluster, so copy them out about once a
 week. `scripts/db-backup-fetch.sh` copies the newest dump to `local/db-dumps/`
 (add `--all` for every dump), and you move it to your backup storage from there.
 
+### A Helm upgrade was interrupted
+
+If `install.sh --apply` was stopped during `helm upgrade` (Ctrl-C, lost SSH
+session), the release stays in `pending-upgrade` and the next `--apply` fails
+with "another operation is in progress". Check with
+`helm history grafana -n <ns>`, roll back to the last `deployed` revision with
+`helm rollback grafana <revision> -n <ns>`, then run `--apply` again.
+
 ### Restore
 
 ```bash
@@ -131,7 +148,7 @@ scripts/db-restore.sh --file latest            # or --file grafana-YYYYmmdd-HHMM
 ```
 
 The script stops Grafana for the few minutes the restore takes and starts it
-again afterwards.
+again afterwards, also when the restore fails or you interrupt it.
 
 ### Roll back a deployment
 
@@ -139,8 +156,8 @@ again afterwards.
 scripts/install.sh --rollback
 ```
 
-This returns the Helm release to its previous revision and re-applies the
-platform objects saved before the last `--apply`. It does not undo a database
+This returns the Helm release to the revision it had before the last `--apply`
+and re-applies the platform objects saved by that `--apply`. It does not undo a database
 schema migration. If an upgrade migrated the schema, restore the backup you took
 before it.
 

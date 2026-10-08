@@ -58,3 +58,14 @@ spec:
           annotations:
             summary: No successful Grafana database backup for more than 2 days.
             description: The grafana-db-backup CronJob in __NAMESPACE__ has not succeeded for more than 48 hours.
+        # The metric above exists only after a first success: catch a backup that
+        # has never worked (the first one runs at 01:15 UTC after the install).
+        - alert: GrafanaBackupNeverSucceeded
+          expr: |
+            absent(kube_cronjob_status_last_successful_time{cronjob="grafana-db-backup", namespace="__NAMESPACE__"})
+          for: 26h
+          labels:
+            severity: warning
+          annotations:
+            summary: The Grafana database backup has never succeeded.
+            description: The grafana-db-backup CronJob in __NAMESPACE__ has no successful run for more than 26 hours after it appeared.

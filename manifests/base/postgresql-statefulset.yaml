@@ -88,17 +88,30 @@ spec:
             # Logs to the container output instead of files in the data volume.
             - name: POSTGRESQL_LOG_DESTINATION
               value: /dev/stderr
+          # The image runs `exec postgres`, so SIGTERM means a "smart" shutdown
+          # that waits for every Grafana connection to close and ends in a
+          # SIGKILL after the grace period. Ask for a fast shutdown instead.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["pg_ctl", "-D", "/var/lib/pgsql/data/userdata", "stop", "-m", "fast", "-t", "50"]
+          # Crash recovery after an unclean stop can take a while: give it up to
+          # 10 minutes before the liveness probe starts counting.
+          startupProbe:
+            exec:
+              command: ["/usr/libexec/check-container", "--live"]
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 60
           readinessProbe:
             exec:
               command: ["/usr/libexec/check-container"]
-            initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             exec:
               command: ["/usr/libexec/check-container", "--live"]
-            initialDelaySeconds: 60
             periodSeconds: 20
             timeoutSeconds: 10
             failureThreshold: 6

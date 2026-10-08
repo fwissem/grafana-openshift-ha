@@ -20,7 +20,7 @@ and permissions are still there.
 
 | Need | How |
 |---|---|
-| High availability | 4 Grafana replicas, 2 per data zone and one per node, a PodDisruptionBudget and rolling updates that keep every replica up until its replacement is ready |
+| High availability | 4 Grafana replicas, 2 per data zone and spread over the nodes, a PodDisruptionBudget and rolling updates that keep every replica up until its replacement is ready |
 | Zones | The two data zones run everything. The third zone only provides quorum and runs nothing from this project |
 | Persistence | PostgreSQL 16 (Red Hat `rhel9/postgresql-16`) on a replicated block volume, with a daily dump and a tested restore |
 | Login | OpenShift OAuth, with OpenShift groups mapped to Admin, Editor or Viewer. The local admin account stays as a break-glass login |

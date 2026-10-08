@@ -50,7 +50,7 @@ while IFS= read -r pattern || [ -n "$pattern" ]; do
   case "$pattern" in ''|'#'*) continue ;; esac
   npatterns=$((npatterns + 1))
   # -I: skip binary files; -F: fixed string; -i: case-insensitive
-  out="$(xargs -0 -r grep -nIiF -e "$pattern" -- < "$FILELIST" 2>/dev/null \
+  out="$(xargs -0 -r grep -HnIiF -e "$pattern" -- < "$FILELIST" 2>/dev/null \
          | grep -v '^\.anonymity-denylist\.example:')"
   if [ -n "$out" ]; then
     hits=$((hits + 1))
@@ -60,7 +60,7 @@ while IFS= read -r pattern || [ -n "$pattern" ]; do
 done < "$DENYLIST"
 
 # IPv4 addresses: warning only. Loopback, wildcard and documentation ranges are allowed.
-ipout="$(xargs -0 -r grep -nIoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' -- < "$FILELIST" 2>/dev/null \
+ipout="$(xargs -0 -r grep -HnIoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' -- < "$FILELIST" 2>/dev/null \
         | grep -vE ':(127\.0\.0\.1|0\.0\.0\.0|192\.0\.2\.[0-9]+|198\.51\.100\.[0-9]+|203\.0\.113\.[0-9]+)$')"
 if [ -n "$ipout" ]; then
   echo "WARNING: IPv4-looking values found (check they are not real addresses):"

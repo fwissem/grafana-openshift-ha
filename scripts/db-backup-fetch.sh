@@ -29,7 +29,8 @@ load_env "${ENV_ARG:-$LOCAL_DIR/deploy.env}"
 check_cluster
 
 DEST="${DEST:-$LOCAL_DIR/db-dumps}"
-mkdir -p "$DEST" && chmod 700 "$DEST"
+# A new directory is private; an existing one keeps its permissions.
+[ -d "$DEST" ] || (umask 077 && mkdir -p "$DEST")
 pod="grafana-db-backup-fetch"
 image="$(ocn get statefulset grafana-postgresql -o jsonpath='{.spec.template.spec.containers[0].image}')"
 zl="$(printf '"%s",' "${DATA_ZONE_LIST[@]}")"
@@ -45,6 +46,7 @@ metadata:
     app.kubernetes.io/part-of: grafana
 spec:
   restartPolicy: Never
+  securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
   automountServiceAccountToken: false
   affinity:
     nodeAffinity:
@@ -55,7 +57,7 @@ spec:
   containers:
     - name: fetch
       image: $image
-      command: ["sleep", "900"]
+      command: ["sleep", "3600"]
       securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
       volumeMounts:
         - {name: backup, mountPath: /backup, readOnly: true}

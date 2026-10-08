@@ -27,6 +27,28 @@ Changes that affect users of this repository. Dates are UTC.
   runs in the quorum zone.
 - Documentation rewritten in plainer language.
 
+### Fixed
+- `create-secrets.sh` no longer mistakes an API error for a missing secret, and
+  creates the fixed secrets with `oc create`, so it can never overwrite the
+  database password or the secret key.
+- `db-restore.sh` stops as soon as the restore Job fails and always scales
+  Grafana back up, also after an error or Ctrl-C.
+- `install.sh --rollback` returns to the revision recorded by the last
+  `--apply` instead of "previous".
+- Grafana liveness uses `/healthz`, so a PostgreSQL restart no longer restarts
+  every replica. Readiness still checks the database.
+- PostgreSQL stops with a fast shutdown and has a startup probe for crash
+  recovery.
+- The router NetworkPolicy also admits host-network ingress controllers, and
+  the monitoring policy admits User Workload Monitoring explicitly.
+- Backups remove leftover temporary files, check each dump with
+  `pg_restore --list`, and a new alert fires if no backup has ever succeeded.
+- Acceptance test: no silent exit before A10, cleanup on any exit, database
+  type read with jq.
+- Smaller fixes: sessions limited to 24 hours, PDB lets unhealthy pods be
+  evicted, pods restart when datasource tokens change, CI actions pinned to
+  commit SHAs and kubeconform checked against its checksum.
+
 ## 2026-10-08 - local test stage
 
 ### Added

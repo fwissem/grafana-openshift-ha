@@ -34,6 +34,7 @@ grafana.ini:
   auth.generic_oauth:
     enabled: true
     name: OpenShift
+    auto_login: false            # anonymous viewers must not be sent to the login page
     client_id: grafana
     # client_secret comes from GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET.
     scopes: user:info user:check-access

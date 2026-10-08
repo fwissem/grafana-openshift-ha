@@ -91,14 +91,59 @@ check_cluster() {
 confirm() {
   [ "${ASSUME_YES:-0}" = "1" ] && return 0
   local answer
-  read -r -p "$1 [y/N] " answer
+  read -r -p "$1 [y/N] " answer || die "no answer (non-interactive run? add --yes)"
   [ "$answer" = "y" ] || [ "$answer" = "Y" ] || die "aborted"
 }
 
 ocn() { oc -n "$NAMESPACE" "$@"; }
 
-# Create or replace a generic secret from files in a private temp dir
-# (values never appear on a command line). Usage: apply_secret name key=file...
+# exists <kind> <name>: 0 if the object exists, 1 if it does not. Any other error
+# (no permission, API unreachable, expired login) stops the script, so a failed
+# read is never mistaken for "absent" and a kept secret is never regenerated.
+exists() {
+  local out
+  out="$(ocn get "$1" "$2" -o name 2>&1)" && return 0
+  case "$out" in
+    *NotFound*|*"not found"*) return 1 ;;
+    *) die "cannot read $1/$2: $out" ;;
+  esac
+}
+
+# wait_job <job> <seconds>: returns 0 when the Job completes, 1 as soon as it
+# fails, 2 on timeout. (`oc wait --for=condition=complete` would keep waiting
+# until the timeout on a failed Job.)
+wait_job() {
+  local job="$1" end=$((SECONDS + $2)) c
+  while [ "$SECONDS" -lt "$end" ]; do
+    c="$(ocn get job "$job" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.type} {end}' 2>/dev/null || true)"
+    case "$c" in
+      *Complete*) return 0 ;;
+      *Failed*) return 1 ;;
+    esac
+    sleep 5
+  done
+  return 2
+}
+
+# Need read access to nodes for the zone checks.
+need_node_read() {
+  [ "$(oc auth can-i list nodes 2>/dev/null)" = yes ] \
+    || die "your account cannot list nodes; the zone checks need it (ask for a cluster-reader role)"
+}
+
+# Create a generic secret from files in a private temp dir (values never appear
+# on a command line). Fails if the secret already exists, so a password or key
+# that must never change cannot be overwritten. Usage: create_secret name key=file...
+create_secret() {
+  local name="$1"; shift
+  local args=() kv
+  for kv in "$@"; do args+=("--from-file=$kv"); done
+  ocn create secret generic "$name" "${args[@]}" >/dev/null || die "could not create secret $name (does it already exist?)"
+  ocn label secret "$name" app.kubernetes.io/part-of=grafana --overwrite >/dev/null 2>&1 || true
+}
+
+# Create or replace a generic secret, same rules for the values.
+# Usage: apply_secret name key=file...
 apply_secret() {
   local name="$1"; shift
   local args=() kv

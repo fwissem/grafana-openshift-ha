@@ -26,7 +26,7 @@ check_cluster
 job="grafana-db-backup-manual-$(date +%Y%m%d-%H%M%S)"
 ocn create job "$job" --from=cronjob/grafana-db-backup >/dev/null
 log "job $job started"
-if ocn wait --for=condition=complete "job/$job" --timeout=30m; then
+if wait_job "$job" 1800; then
   ocn logs "job/$job"
   ok "backup done"
 else

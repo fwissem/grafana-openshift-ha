@@ -54,7 +54,18 @@ esac
 [ -r "$RENDER_DIR/restore/kustomization.yaml" ] || die "run scripts/install.sh --check first (renders local/render/restore)"
 
 replicas="$(ocn get deployment "$RELEASE" -o jsonpath='{.spec.replicas}')"
-confirm "Scale Grafana ($replicas replicas) to 0 and REPLACE the database with dump '$FILE'?"
+# An earlier run interrupted half-way leaves Grafana at 0: come back to REPLICAS.
+[ "${replicas:-0}" -gt 0 ] || replicas="$REPLICAS"
+confirm "Scale Grafana to 0, REPLACE the database with dump '$FILE', then scale back to $replicas?"
+
+# From here on, Grafana is scaled back up whatever happens (error, Ctrl-C).
+scale_back() {
+  log "scaling Grafana back to $replicas"
+  ocn delete job grafana-db-restore --ignore-not-found >/dev/null 2>&1 || true
+  ocn scale "deployment/$RELEASE" --replicas="$replicas" >/dev/null || warn "scale back failed: run oc -n $NAMESPACE scale deployment/$RELEASE --replicas=$replicas"
+}
+trap 'exit 130' INT TERM
+trap 'scale_back' EXIT
 
 ocn scale "deployment/$RELEASE" --replicas=0 >/dev/null
 log "waiting for Grafana pods to stop"
@@ -66,12 +77,14 @@ oc kustomize "$RENDER_DIR/restore" \
   | ocn apply -f - >/dev/null
 log "restore job started"
 rc=0
-ocn wait --for=condition=complete job/grafana-db-restore --timeout=30m || rc=1
+wait_job grafana-db-restore 1800 || rc=$?
 ocn logs job/grafana-db-restore || true
 
-log "scaling Grafana back to $replicas"
-ocn scale "deployment/$RELEASE" --replicas="$replicas" >/dev/null
+trap - INT TERM EXIT
+scale_back
 ocn rollout status "deployment/$RELEASE" --timeout=15m
-ocn delete job grafana-db-restore --ignore-not-found >/dev/null
-[ "$rc" -eq 0 ] || die "restore job failed: Grafana restarted on the previous database content"
-ok "database restored from $FILE, Grafana running"
+case "$rc" in
+  0) ok "database restored from $FILE, Grafana running" ;;
+  1) die "restore job failed: Grafana restarted on the previous database content" ;;
+  *) die "restore job did not finish in 30 minutes and was deleted: check the database before using Grafana" ;;
+esac

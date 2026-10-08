@@ -51,8 +51,8 @@ check_cluster
 oc get namespace "$NAMESPACE" >/dev/null 2>&1 \
   || die "namespace $NAMESPACE does not exist (ask for it, or: oc new-project $NAMESPACE)"
 
-exists_secret() { ocn get secret "$1" >/dev/null 2>&1; }
-exists_cm()     { ocn get configmap "$1" >/dev/null 2>&1; }
+exists_secret() { exists secret "$1"; }
+exists_cm()     { exists configmap "$1"; }
 
 TOKENS_FILE="$LOCAL_DIR/datasource-tokens.env"
 REDIRECT_URI="https://$ROUTE_HOST/login/generic_oauth"
@@ -66,7 +66,7 @@ for s in grafana-admin grafana-db grafana-secret-key grafana-oauth; do
 done
 if [ -r "$TOKENS_FILE" ]; then
   if ! exists_secret grafana-datasource-tokens || [ "$REFRESH_TOKENS" = 1 ]; then
-    plan+=("create/replace secret grafana-datasource-tokens from $TOKENS_FILE ($(grep -cE '^[A-Z0-9_]+=' "$TOKENS_FILE") keys)")
+    plan+=("create/replace secret grafana-datasource-tokens from $TOKENS_FILE ($(grep -cE '^[A-Z0-9_]+=' "$TOKENS_FILE" || true) keys)")
   else
     ok "secret grafana-datasource-tokens exists (kept; --refresh-tokens to reload)"
   fi
@@ -78,7 +78,7 @@ if ! exists_cm grafana-oauth-ca || [ "$REFRESH_CA" = 1 ]; then
 else
   ok "ConfigMap grafana-oauth-ca exists (kept; --refresh-ca to rebuild)"
 fi
-if oc get oauthclient grafana >/dev/null 2>&1; then
+if oc get oauthclient grafana -o name >/dev/null 2>&1; then
   current_redirects="$(oc get oauthclient grafana -o jsonpath='{.redirectURIs}')"
   case "$current_redirects" in
     *"$REDIRECT_URI"*) ok "OAuthClient grafana exists with redirect $REDIRECT_URI" ;;
@@ -110,19 +110,19 @@ init_secure_tmp; TMP="$SECURE_TMP"
 if ! exists_secret grafana-admin; then
   printf 'admin' > "$TMP/admin-user"
   gen_password 24 > "$TMP/admin-password"
-  apply_secret grafana-admin "admin-user=$TMP/admin-user" "admin-password=$TMP/admin-password"
+  create_secret grafana-admin "admin-user=$TMP/admin-user" "admin-password=$TMP/admin-password"
   ok "secret grafana-admin created"
 fi
 if ! exists_secret grafana-db; then
   printf 'grafana' > "$TMP/db-user"
   gen_password 24 > "$TMP/db-password"
   printf 'grafana' > "$TMP/db-name"
-  apply_secret grafana-db "username=$TMP/db-user" "password=$TMP/db-password" "database=$TMP/db-name"
+  create_secret grafana-db "username=$TMP/db-user" "password=$TMP/db-password" "database=$TMP/db-name"
   ok "secret grafana-db created"
 fi
 if ! exists_secret grafana-secret-key; then
   gen_password 40 > "$TMP/secret-key"
-  apply_secret grafana-secret-key "secret-key=$TMP/secret-key"
+  create_secret grafana-secret-key "secret-key=$TMP/secret-key"
   ok "secret grafana-secret-key created"
 fi
 
@@ -133,7 +133,7 @@ if [ -r "$TOKENS_FILE" ] && { ! exists_secret grafana-datasource-tokens || [ "$R
   [ -z "$bad" ] || die "$TOKENS_FILE: lines must be KEY=VALUE with KEY in [A-Z0-9_]"
   ocn create secret generic grafana-datasource-tokens --from-env-file="$TOKENS_FILE" \
       --dry-run=client -o yaml | ocn apply -f - >/dev/null
-  ok "secret grafana-datasource-tokens created/replaced (restart Grafana to load new tokens)"
+  ok "secret grafana-datasource-tokens created/replaced (run scripts/install.sh --apply to roll the pods)"
 fi
 
 # ------------------------------------------------------------------------------------
@@ -179,17 +179,18 @@ fi
   printf 'secret: "%s"\n' "$(cat "$TMP/client-secret")"
 } > "$TMP/oauthclient.yaml"
 
-if [ "$(oc auth can-i create oauthclients 2>/dev/null)" = "yes" ]; then
+if [ "$(oc auth can-i create oauthclients 2>/dev/null)" = "yes" ] \
+   && [ "$(oc auth can-i patch oauthclients 2>/dev/null)" = "yes" ]; then
   oc apply -f "$TMP/oauthclient.yaml" >/dev/null
   ok "OAuthClient grafana created/updated (redirect $REDIRECT_URI)"
   if [ "$need_client_secret" = 1 ]; then
-    apply_secret grafana-oauth "client-secret=$TMP/client-secret"
+    create_secret grafana-oauth "client-secret=$TMP/client-secret"
     ok "secret grafana-oauth created"
   fi
 else
   mkdir -p "$RENDER_DIR"
   (umask 077 && cp "$TMP/oauthclient.yaml" "$RENDER_DIR/oauthclient.yaml")
-  [ "$need_client_secret" = 1 ] && apply_secret grafana-oauth "client-secret=$TMP/client-secret"
+  if [ "$need_client_secret" = 1 ]; then create_secret grafana-oauth "client-secret=$TMP/client-secret"; fi
   warn "you cannot create OAuthClients. A cluster administrator must run:"
   warn "    oc apply -f $RENDER_DIR/oauthclient.yaml"
   warn "then delete that file (it contains the client secret)."
