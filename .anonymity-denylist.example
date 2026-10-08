@@ -1,0 +1,9 @@
+# Copy to .anonymity-denylist (git-ignored) and list one string per line.
+# Any tracked or to-be-tracked file containing one of these strings
+# (case-insensitive, fixed string) makes scripts/check-anonymity.sh fail.
+# Lines starting with # and empty lines are ignored.
+#
+# Put here: company name, internal DNS domain, cluster name prefixes,
+# namespaces specific to your site, bastion hostnames, group names.
+mycompany
+corp.example.internal

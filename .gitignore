@@ -1,0 +1,20 @@
+# --- Private, environment-specific files: never commit ---
+values-local.yaml
+**/values-local.yaml
+secrets.local.env
+.anonymity-denylist
+/local/
+/exports/
+
+# --- Helm chart: downloaded and untarred by hand, not stored here ---
+/charts/
+
+# --- Test output ---
+tests/local/out/
+
+# --- Editors / OS ---
+.vscode/*
+!.vscode/extensions.json
+*.swp
+.DS_Store
+Thumbs.db
