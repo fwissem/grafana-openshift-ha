@@ -129,5 +129,5 @@ jobs:
           done < values/plugins.lock
           docker logs grafana-ci > /tmp/grafana.log 2>&1
           if grep -E 'Installing plugin' /tmp/grafana.log; then echo "::error::Grafana tried to download plugins"; rc=1; fi
-          grep -E 'level=(error|warn)' /tmp/grafana.log | grep -i plugin | head -n 5 | while read -r l; do echo "::warning::$l"; done
+          { grep -E 'level=(error|warn)' /tmp/grafana.log | grep -i plugin || true; } | head -n 5 | while read -r l; do echo "::warning::$l"; done
           exit $rc
