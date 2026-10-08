@@ -453,16 +453,44 @@ $pvcCount = 0; if ($pvcs) { $pvcCount = @($pvcs.items).Count }
 if ($dbType -eq 'postgres' -and $pvcCount -eq 0) { Result 'T03' 'state in PostgreSQL' 'PASS' 'database.type=postgres, no Grafana PVC' }
 else { Result 'T03' 'state in PostgreSQL' 'FAIL' "database.type=$dbType, Grafana PVCs=$pvcCount (settings HTTP $($settings.Status))" }
 
-# T04 alerting HA cluster
+# T04 alerting HA: the replicas form one gossip cluster.
+# Read the cluster size from the Prometheus metrics of each replica (reached
+# through the service, so several pods answer); fall back to the gossip
+# messages in the pod logs if the metric is not exposed.
+function Get-ClusterSizes {
+    $sizes = @()
+    for ($i = 0; $i -lt 12; $i++) {
+        $m = Api 'GET' '/metrics'
+        if ($m.Status -eq 200 -and $m.Raw) {
+            foreach ($line in ($m.Raw -split "`n")) {
+                if ($line -match '^[a-z_]*cluster_members(\{[^}]*\})?\s+([0-9.e+]+)\s*$') { $sizes += [int][double]$Matches[2] }
+            }
+        }
+    }
+    return $sizes
+}
+$sizes = @()
 $peersOk = Wait-Until {
-    $s = Api 'GET' '/api/alertmanager/grafana/api/v2/status'
-    $s.Json -and $s.Json.cluster -and @($s.Json.cluster.peers).Count -ge $Replicas
-} 120 "alertmanager cluster with $Replicas peers"
-$st = Api 'GET' '/api/alertmanager/grafana/api/v2/status'
-$peerCount = 0; $clusterStatus = 'n/a'
-if ($st.Json -and $st.Json.cluster) { $peerCount = @($st.Json.cluster.peers).Count; $clusterStatus = $st.Json.cluster.status }
-if ($peersOk) { Result 'T04' 'alerting HA' 'PASS' "cluster status=$clusterStatus, peers=$peerCount" }
-else { Result 'T04' 'alerting HA' 'FAIL' "cluster status=$clusterStatus, peers=$peerCount (HTTP $($st.Status))" }
+    $script:sizes = @(Get-ClusterSizes)
+    $script:sizes.Count -gt 0 -and (@($script:sizes | Where-Object { $_ -ne $Replicas }).Count -eq 0)
+} 120 "alerting cluster of $Replicas members"
+$sizes = $script:sizes
+if ($sizes.Count -gt 0) {
+    $detail = "cluster_members seen on the replicas: $((($sizes | Sort-Object -Unique) -join ', ')) (expected $Replicas)"
+    if ($peersOk) { Result 'T04' 'alerting HA' 'PASS' $detail } else { Result 'T04' 'alerting HA' 'FAIL' $detail }
+} else {
+    # Fallback: last "gossip ... now=N" message of each pod.
+    $counts = @()
+    foreach ($p in (Get-ReadyGrafanaPods)) {
+        $lg = (K @('logs', $p.metadata.name, '-c', 'grafana')).Out
+        $last = @($lg -split "`n" | Where-Object { $_ -match 'component=clustering' -and $_ -match 'now=(\d+)' }) | Select-Object -Last 1
+        if ($last -and $last -match 'now=(\d+)') { $counts += [int]$Matches[1] }
+    }
+    $settled = @(Get-ReadyGrafanaPods | Where-Object { (K @('logs', $_.metadata.name, '-c', 'grafana')).Out -match 'gossip settled' }).Count
+    $detail = "metric not exposed; from logs: gossip settled on $settled/$Replicas pods, peers seen: $(($counts | Sort-Object -Unique) -join ', ')"
+    if ($settled -eq $Replicas -and @($counts | Where-Object { $_ -eq $Replicas }).Count -gt 0) { Result 'T04' 'alerting HA' 'PASS' $detail }
+    else { Result 'T04' 'alerting HA' 'FAIL' $detail }
+}
 
 # T05 test content: clean previous run, then create folders, dashboards, permissions, user
 foreach ($f in @('shared-test', 'restricted-test')) { Api 'DELETE' "/api/folders/$($f)?forceDeleteRules=true" | Out-Null }
