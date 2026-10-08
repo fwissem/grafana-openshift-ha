@@ -152,3 +152,36 @@ apply_secret() {
     || die "could not create secret $name"
   ocn label secret "$name" app.kubernetes.io/part-of=grafana --overwrite >/dev/null 2>&1 || true
 }
+
+# ------------------------------------------------------------------------------
+# Grafana image with baked-in plugins (image/Dockerfile, values/plugins.lock).
+# ------------------------------------------------------------------------------
+IMAGE_DIR="$REPO_ROOT/image"
+PLUGINS_LOCK="$REPO_ROOT/values/plugins.lock"
+
+# Official image the build starts from, e.g. docker.io/grafana/grafana:13.2.3-distroless
+grafana_base_image() { sed -n 's/^ARG BASE_IMAGE=//p' "$IMAGE_DIR/Dockerfile"; }
+
+# Tag of the built image: base tag + a hash of the Dockerfile and the plugin list,
+# so any change to either gives a new tag, and the same inputs the same tag.
+grafana_image_tag() {
+  local base h
+  base="$(grafana_base_image)"
+  h="$(cat "$IMAGE_DIR/Dockerfile" "$PLUGINS_LOCK" | sha256sum | cut -c1-10)"
+  printf '%s-p%s\n' "${base##*:}" "$h"
+}
+
+# Check every archive of plugins.lock against its SHA-256. Prints "id version" lines.
+verify_plugin_archives() {
+  local pid pver psum _rest f got n=0
+  while read -r pid pver psum _rest; do
+    case "$pid" in ''|'#'*) continue ;; esac
+    f="$IMAGE_DIR/plugins/$pid-$pver.zip"
+    [ -r "$f" ] || die "missing $f (listed in values/plugins.lock)"
+    got="$(sha256sum "$f" | cut -d' ' -f1)"
+    [ "$got" = "$psum" ] || die "$f: SHA-256 is $got, values/plugins.lock expects $psum"
+    echo "$pid $pver"
+    n=$((n + 1))
+  done < "$PLUGINS_LOCK"
+  [ "$n" -gt 0 ] || die "no plugin listed in $PLUGINS_LOCK"
+}

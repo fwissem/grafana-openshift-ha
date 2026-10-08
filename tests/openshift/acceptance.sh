@@ -238,9 +238,11 @@ else result A11 FAIL "unlabelled: '$denied' / labelled: '$allowed'"; fi
 # A12 backup now
 job="acc-backup-$(date +%Y%m%d%H%M%S)"
 ocn create job "$job" --from=cronjob/grafana-db-backup >/dev/null
-if wait_job "$job" 900 && ocn logs "job/$job" | grep -q 'backup written'; then
-  result A12 PASS "backup job succeeded: $(ocn logs "job/$job" | grep 'backup written' | sed 's#.*/##')"
-else result A12 FAIL "backup job failed: $(ocn logs "job/$job" 2>&1 | tail -n 3 | tr '\n' ' ')"; fi
+jobrc=0; wait_job "$job" 900 || jobrc=$?
+ocn logs "job/$job" > "$TMP/joblog" 2>&1 || true
+if [ "$jobrc" -eq 0 ] && grep -q 'backup written' "$TMP/joblog"; then
+  result A12 PASS "backup job succeeded: $(grep 'backup written' "$TMP/joblog" | sed 's#.*/##')"
+else result A12 FAIL "backup job failed: $(tail -n 3 "$TMP/joblog" | tr '\n' ' ')"; fi
 ocn delete job "$job" --ignore-not-found >/dev/null
 
 # A13 restore (disruptive, optional)

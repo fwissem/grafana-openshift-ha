@@ -30,12 +30,6 @@ jobs:
       - name: no CRLF in shell scripts
         run: |
           if grep -rlI $'\r' --include='*.sh' .; then echo "CRLF found"; exit 1; fi
-      - name: plugin list in values.yaml matches values/plugins.lock
-        run: |
-          from_values="$(sed -n 's/^ *preinstall_sync: *//p' values/values.yaml | tr ',' '\n' | sort)"
-          from_lock="$(awk '!/^#/ && NF >= 3 {print $1 "@" $2}' values/plugins.lock | sort)"
-          echo "values.yaml: $from_values"; echo "plugins.lock: $from_lock"
-          [ "$from_values" = "$from_lock" ]
       - name: yamllint
         run: |
           pip install --quiet yamllint
@@ -89,3 +83,37 @@ jobs:
           tar xzf kubeconform.tar.gz kubeconform
           ./kubeconform -strict -summary -kubernetes-version 1.31.0 -ignore-missing-schemas -skip Route,ServiceMonitor,PrometheusRule \
             /tmp/kind.yaml /tmp/openshift.yaml /tmp/restore.yaml /tmp/grafana.yaml /tmp/grafana-kind.yaml
+
+  image:
+    name: Grafana image with plugins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: build the image as scripts/build-image.sh does
+        run: |
+          set -euo pipefail
+          . scripts/lib/common.sh
+          mkdir -p /tmp/ctx/plugins
+          cp image/Dockerfile /tmp/ctx/
+          verify_plugin_archives | while read -r pid pver; do
+            unzip -q "image/plugins/$pid-$pver.zip" -d /tmp/ctx/plugins
+          done
+          docker build -t grafana-ha:test /tmp/ctx
+      - name: every plugin of plugins.lock loads, signed, at its version
+        run: |
+          set -euo pipefail
+          docker run -d --name g -p 3000:3000 \
+            -e GF_PATHS_PLUGINS=/opt/grafana/plugins -e GF_PLUGINS_PREINSTALL_DISABLED=true \
+            -e GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED=true \
+            grafana-ha:test
+          for _ in $(seq 1 60); do curl -fs http://localhost:3000/api/health >/dev/null && break; sleep 2; done
+          rc=0
+          while read -r pid pver _; do
+            case "$pid" in ''|'#'*) continue ;; esac
+            got="$(curl -fs -u admin:admin "http://localhost:3000/api/plugins/$pid/settings" | jq -r '"\(.info.version) \(.signature)"')"
+            echo "$pid: $got (expected $pver valid)"
+            [ "$got" = "$pver valid" ] || rc=1
+          done < values/plugins.lock
+          if docker logs g 2>&1 | grep -E 'Installing plugin'; then echo "Grafana tried to download plugins"; rc=1; fi
+          exit $rc

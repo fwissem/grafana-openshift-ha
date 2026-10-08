@@ -73,6 +73,7 @@ Set-Content -Path $LogFile -Value "run-test started $(Get-Date -Format s)" -Enco
 $script:BaseUrl = $PortUrl
 $script:AuthB64 = ''
 $script:PortForward = $null
+$script:ImageTag = ''
 $Results = New-Object System.Collections.ArrayList
 
 # --- Helpers -----------------------------------------------------------------
@@ -185,12 +186,60 @@ function Ensure-Secret([string]$Name, [hashtable]$Data) {
     if ($code -ne 0) { Log "ERROR: could not create secret $Name : $r"; Collect-Diagnostics; exit 1 }
 }
 
+# Tag of the Grafana image with its plugins: same rule as scripts/lib/common.sh
+# (base tag + hash of image/Dockerfile and values/plugins.lock).
+function Get-ImageInfo {
+    $df = Join-Path $Root 'image\Dockerfile'
+    $lock = Join-Path $Root 'values\plugins.lock'
+    $bytes = [IO.File]::ReadAllBytes($df) + [IO.File]::ReadAllBytes($lock)
+    $hash = [Security.Cryptography.SHA256]::Create().ComputeHash([byte[]]$bytes)
+    $hex = -join ($hash | ForEach-Object { $_.ToString('x2') })
+    $base = ((Get-Content $df | Where-Object { $_ -match '^ARG BASE_IMAGE=' }) -replace '^ARG BASE_IMAGE=', '').Trim()
+    return [pscustomobject]@{ Base = $base; Tag = "$($base.Split(':')[-1])-p$($hex.Substring(0, 10))" }
+}
+
+# Build the Grafana image with the plugins (Podman) and load it into the kind
+# nodes, the local equivalent of scripts/build-image.sh.
+function Build-GrafanaImage {
+    $info = Get-ImageInfo
+    $script:ImageTag = $info.Tag
+    $name = "localhost/grafana-ha:$($info.Tag)"
+    $ctx = Join-Path $Out 'build'
+    Remove-Item -Recurse -Force $ctx -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path (Join-Path $ctx 'plugins') | Out-Null
+    Copy-Item (Join-Path $Root 'image\Dockerfile') $ctx
+    foreach ($line in Get-Content (Join-Path $Root 'values\plugins.lock')) {
+        if ($line -match '^\s*(#|$)') { continue }
+        $f = $line.Trim() -split '\s+'
+        $zip = Join-Path $Root "image\plugins\$($f[0])-$($f[1]).zip"
+        if (-not (Test-Path $zip)) { Log "ERROR: missing $zip"; return $false }
+        $got = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
+        if ($got -ne $f[2]) { Log "ERROR: $zip has SHA-256 $got, values\plugins.lock expects $($f[2])"; return $false }
+        Expand-Archive -Path $zip -DestinationPath (Join-Path $ctx 'plugins') -Force
+        Log "Plugin $($f[0]) $($f[1]) unpacked (SHA-256 checked)"
+    }
+    $r = Exec 'podman' @('build', '-t', $name, $ctx)
+    if ($r.Code -ne 0) { Log "ERROR: podman build failed: $($r.Out)"; return $false }
+    $tar = Join-Path $ctx 'grafana-image.tar'
+    $r = Exec 'podman' @('save', '-o', $tar, $name)
+    if ($r.Code -ne 0) { Log "ERROR: podman save failed: $($r.Out)"; return $false }
+    $r = Exec 'kind' @('load', 'image-archive', $tar, '--name', $Cluster)
+    if ($r.Code -ne 0) { Log "ERROR: kind load failed: $($r.Out)"; return $false }
+    Remove-Item -Force $tar -ErrorAction SilentlyContinue
+    Log "Image $name built and loaded into the kind nodes"
+    return $true
+}
+
 function Helm-Deploy([string]$DatasourceFile) {
+    if (-not $script:ImageTag) { $script:ImageTag = (Get-ImageInfo).Tag }
     $a = @('upgrade', '--install', $Release, $ChartDir,
            '--kube-context', $Ctx, '--namespace', $Ns,
            '-f', (Join-Path $Root 'values\values.yaml'),
            '-f', (Join-Path $PSScriptRoot 'values-kind.yaml'),
            '-f', (Join-Path $PSScriptRoot $DatasourceFile),
+           '--set', 'image.registry=localhost', '--set', 'image.repository=grafana-ha',
+           '--set', "image.tag=$($script:ImageTag)", '--set', 'image.sha=',
+           '--set', 'image.pullPolicy=Never',
            '--wait', '--timeout', '15m')
     return Exec 'helm' $a
 }
@@ -400,7 +449,11 @@ if (-not $SkipDeploy) {
     if ($r.Code -ne 0) { Log 'ERROR: PostgreSQL did not become ready.'; Collect-Diagnostics; exit 1 }
     Log 'PostgreSQL ready'
 
-    # --- 4. Grafana --------------------------------------------------------------
+    # --- 4. Grafana image with the plugins -------------------------------------
+    Log 'Building the Grafana image with its plugins (Podman) and loading it into kind'
+    if (-not (Build-GrafanaImage)) { Collect-Diagnostics; exit 1 }
+
+    # --- 5. Grafana --------------------------------------------------------------
     Log "Deploying Grafana (helm upgrade --install, chart $ChartVersion). First start runs DB migrations."
     $r = Helm-Deploy 'values-test-datasources.yaml'
     if ($r.Code -ne 0) { Log "ERROR: helm upgrade failed: $($r.Out)"; Collect-Diagnostics; exit 1 }
@@ -743,14 +796,13 @@ $total = 0; if ($allPods) { $total = @($allPods.items).Count }
 if ($inQuorum.Count -eq 0) { Result 'T14' 'quorum zone empty' 'PASS' "0 of $total pods in namespace $Ns ran in $QuorumZone" }
 else { Result 'T14' 'quorum zone empty' 'FAIL' "pods in ${QuorumZone}: $($inQuorum -join ', ')" }
 
-# T15 plugins: the versions pinned in values.yaml answer on every replica (30
-# requests through the Service, new connection each time), and the app plugins
-# turned off with disable_plugins are absent.
-$valuesText = Get-Content -Raw -Path (Join-Path $Root 'values\values.yaml')
-$pinned = @()
-if ($valuesText -match '(?m)^\s*preinstall_sync:\s*(\S+)') { $pinned = $Matches[1].Split(',') }
+# T15 plugins: the plugins baked into the image (values/plugins.lock) answer at
+# the right version on every replica (30 requests through the Service, new
+# connection each time), and the app plugins Grafana would download are absent.
+$pinned = @(Get-Content (Join-Path $Root 'values\plugins.lock') | Where-Object { $_ -notmatch '^\s*(#|$)' } |
+    ForEach-Object { $f = $_.Trim() -split '\s+'; "$($f[0])@$($f[1])" })
 $problems = @()
-if ($pinned.Count -eq 0) { $problems += 'no preinstall_sync list found in values.yaml' }
+if ($pinned.Count -eq 0) { $problems += 'no plugin listed in values\plugins.lock' }
 for ($i = 0; $i -lt 30; $i++) {
     foreach ($entry in $pinned) {
         $id, $ver = $entry.Split('@')[0, 1]

@@ -63,11 +63,12 @@ other on the gossip port 9094, and only pods labelled `grafana-db-client=true`
 can reach PostgreSQL.
 
 The route terminates TLS at the edge, redirects HTTP to HTTPS and Grafana sets
-secure cookies. Analytics, update checks and the news feed are off. The only
-outbound call is the download of the two pinned plugins when a pod starts, from
-grafana.com or from the internal mirror set in `PLUGIN_MIRROR_URL`
-(docs/PLUGINS.md). Users log in through OpenShift OAuth, and the local admin
-account remains only for break-glass access.
+secure cookies. Analytics, update checks, the news feed, plugin downloads and
+the retrieval of plugin signing keys are off, so Grafana makes no call to the
+Internet. The plugins are baked into the image from signed archives whose
+SHA-256 is checked before every build (docs/PLUGINS.md). Users log in through
+OpenShift OAuth, and the local admin account remains only for break-glass
+access.
 
 ## Known exposures
 

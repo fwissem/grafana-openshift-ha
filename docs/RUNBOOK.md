@@ -20,11 +20,10 @@ helm pull grafana-community/grafana --version 13.3.1 --untar --untardir /opt/gra
 
 The cluster must be able to pull two images, directly or through a mirror:
 `docker.io/grafana/grafana:13.2.3-distroless` and
-`registry.redhat.io/rhel9/postgresql-16`.
-
-The Grafana pods also download two plugins when they start, from grafana.com
-by default. If pods cannot reach grafana.com, set up the mirror described in
-[PLUGINS.md](PLUGINS.md) before installing.
+`registry.redhat.io/rhel9/postgresql-16`. The Grafana image with its plugins is
+built from the first one in the cluster's internal registry (step 4), so the
+cluster needs the internal registry and the Build API. Nothing is downloaded
+from grafana.com.
 
 ## 1. Collect facts (read-only)
 
@@ -73,14 +72,25 @@ writes `local/render/oauthclient.yaml`, and a cluster administrator applies it
 with `oc apply -f local/render/oauthclient.yaml`. Delete the file afterwards
 because it contains the client secret.
 
-## 4. Install
+## 4. Build the Grafana image with its plugins
+
+```bash
+scripts/build-image.sh --check
+scripts/build-image.sh --apply  # OpenShift binary build, about 2 minutes
+```
+
+The script checks each plugin archive against `values/plugins.lock`, imports
+the official Grafana image, and builds `grafana:<tag>` in the namespace. It
+does nothing if that tag already exists. See [PLUGINS.md](PLUGINS.md).
+
+## 5. Install
 
 ```bash
 scripts/install.sh --check      # renders and shows the diff, changes nothing
 scripts/install.sh --apply      # backs up the current state, then deploys
 ```
 
-## 5. Validate
+## 6. Validate
 
 ```bash
 tests/openshift/acceptance.sh                  # non-production
@@ -90,7 +100,7 @@ tests/openshift/acceptance.sh --with-restore   # also tests a restore (disruptiv
 Then log in once with an OpenShift account from each group and check that it
 gets the expected role (Admin, Editor or Viewer).
 
-## 6. Import the content
+## 7. Import the content
 
 ```bash
 GRAFANA_USER=admin scripts/import-grafana.sh --dir exports/<timestamp> --url https://<new-route>            # plan
@@ -118,13 +128,14 @@ in a pod annotation.
 ### Upgrade Grafana or the chart
 
 1. Remove `charts/grafana` and download the new chart in its place.
-2. Set `CHART_VERSION` in `local/deploy.env`. If you pinned the image tag in
-   `values/values.yaml`, update it too.
+2. Set `CHART_VERSION` in `local/deploy.env`. For a new Grafana version,
+   change `BASE_IMAGE` in `image/Dockerfile` and check that the plugins of
+   `values/plugins.lock` support it.
 3. Read the chart and Grafana release notes for breaking changes.
 4. Take a backup with `scripts/db-backup-now.sh`. A new Grafana version migrates
    the database schema on its first start, and that migration cannot be undone.
-5. On a non-production cluster, run `install.sh --check`, `install.sh --apply`
-   and `acceptance.sh`.
+5. On a non-production cluster, run `build-image.sh --apply`,
+   `install.sh --check`, `install.sh --apply` and `acceptance.sh`.
 
 ### Backups
 
