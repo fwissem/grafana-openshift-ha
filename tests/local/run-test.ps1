@@ -207,6 +207,13 @@ function Collect-Diagnostics {
     foreach ($p in (Get-GrafanaPods)) {
         $lines += "===== logs $($p.metadata.name) (last 80 lines)"
         $lines += (& kubectl --context $Ctx -n $Ns logs $p.metadata.name -c grafana --tail=80 2>&1 | ForEach-Object { "$_" })
+        # A restarted container: why it stopped, and the end of its previous log.
+        $cs = @($p.status.containerStatuses | Where-Object { $_.name -eq 'grafana' })[0]
+        if ($cs -and $cs.restartCount -gt 0) {
+            $t = $cs.lastState.terminated
+            $lines += "===== previous container of $($p.metadata.name): restarts=$($cs.restartCount) reason=$($t.reason) exitCode=$($t.exitCode)"
+            $lines += (& kubectl --context $Ctx -n $Ns logs $p.metadata.name -c grafana --previous --tail=40 2>&1 | ForEach-Object { "$_" })
+        }
     }
     $lines += '===== logs grafana-postgresql-0 (last 60 lines)'
     $lines += (& kubectl --context $Ctx -n $Ns logs grafana-postgresql-0 --tail=60 2>&1 | ForEach-Object { "$_" })

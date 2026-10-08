@@ -48,6 +48,9 @@ Changes that affect users of this repository. Dates are UTC.
 - Smaller fixes: sessions limited to 24 hours, PDB lets unhealthy pods be
   evicted, pods restart when datasource tokens change, CI actions pinned to
   commit SHAs and kubeconform checked against its checksum.
+- Grafana no longer downloads app plugins from grafana.com at every start
+  (`preinstall_disabled`). The local test showed each new pod doing it.
+- The local test diagnostics show why a restarted Grafana container stopped.
 
 ## 2026-10-08 - local test stage
 

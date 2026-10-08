@@ -207,6 +207,11 @@ grafana.ini:
     feedback_links_enabled: false
   news:
     news_feed_enabled: false
+  # Grafana downloads a set of app plugins from grafana.com at every start by
+  # default. The cluster has no Internet access and the pods keep no disk, so
+  # turn it off: every replica then starts with the same bundled plugins.
+  plugins:
+    preinstall_disabled: true
   log:
     mode: console
     level: info

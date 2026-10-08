@@ -63,7 +63,8 @@ other on the gossip port 9094, and only pods labelled `grafana-db-client=true`
 can reach PostgreSQL.
 
 The route terminates TLS at the edge, redirects HTTP to HTTPS and Grafana sets
-secure cookies. Analytics, update checks and the news feed are off, so Grafana
+secure cookies. Analytics, update checks, the news feed and plugin downloads at
+startup are off, so Grafana
 makes no calls to the Internet. Users log in through OpenShift OAuth, and the
 local admin account remains only for break-glass access.
 
