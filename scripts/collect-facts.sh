@@ -22,12 +22,17 @@
 #   -z            node label carrying the zone (target only,
 #                 default: topology.kubernetes.io/zone)
 #
-# Output: ./local/collect-<mode>-<timestamp>/ (git-ignored). It contains REAL
-# names of your environment: never copy it into a tracked file.
+# Output: ./local/collect-<mode>-<timestamp>/ (git-ignored). The raw files
+# contain REAL names of your environment: they stay on this machine.
+# Two extra outputs:
+#   summary.txt                         anonymised (counts, yes/no, types):
+#                                       printed at the end, safe to share
+#   local/values-local.generated.yaml   (target) pre-filled private values with
+#                                       the real zones, domain and OAuth URLs
 
 set -u
 
-usage() { sed -n '2,27p' "$0"; }
+usage() { sed -n '2,32p' "$0"; }
 
 MODE="${1:-}"
 case "$MODE" in
@@ -150,6 +155,134 @@ if [ "$MODE" = "target" ]; then
   run 99-can-i-route     oc -n "$NS" auth can-i create routes.route.openshift.io
 fi
 
+# ======================================================================================
+# Anonymised summary: counts, yes/no and generic types only. No hostname, cluster,
+# namespace, node, zone, group name or IP. Safe to copy out of the environment.
+# ======================================================================================
+SUM="$OUT/summary.txt"
+yn() { if "$@" >/dev/null 2>&1; then echo yes; else echo no; fi; }
+q()  { oc "$@" 2>/dev/null; }
+
+{
+  echo "grafana-openshift-ha collect-facts summary ($MODE) - $(date -u +%Y-%m-%dT%H:%MZ)"
+  echo "openshift_version: $(q get clusterversion version -o jsonpath='{.status.desired.version}')"
+
+  if [ "$MODE" = "source" ]; then
+    pods=$(q -n "$NS" get pods --no-headers | wc -l)
+    echo "pods_in_namespace: $pods"
+    # Image name and tag only, registry host removed.
+    q -n "$NS" get pods -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{end}' \
+      | sed 's#^.*/##' | sort -u | sed 's/^/image: /'
+    for kind in deployment statefulset; do
+      for w in $(q -n "$NS" get "$kind" -o name); do
+        echo "workload: ${kind} replicas=$(q -n "$NS" get "$w" -o jsonpath='{.spec.replicas}')"
+        # What backs /var/lib/grafana: pvc, emptyDir or nothing (container layer).
+        vol=$(q -n "$NS" get "$w" -o jsonpath='{range .spec.template.spec.containers[*].volumeMounts[?(@.mountPath=="/var/lib/grafana")]}{.name}{end}')
+        if [ -z "$vol" ]; then
+          echo "  /var/lib/grafana: NOT MOUNTED (container layer, lost on restart)"
+        else
+          vtype=$(q -n "$NS" get "$w" -o jsonpath="{range .spec.template.spec.volumes[?(@.name==\"$vol\")]}{.persistentVolumeClaim.claimName}{'|'}{.emptyDir}{end}")
+          case "$vtype" in
+            \|*) echo "  /var/lib/grafana: emptyDir (lost on restart)" ;;
+            *\|*) echo "  /var/lib/grafana: PVC" ;;
+            *) echo "  /var/lib/grafana: other volume type" ;;
+          esac
+        fi
+        db=$(q -n "$NS" get "$w" -o jsonpath='{.spec.template.spec.containers[*].env[*].name}' | tr ' ' '\n' | grep -c '^GF_DATABASE_' || true)
+        echo "  GF_DATABASE_* env vars: $db"
+      done
+    done
+    echo "pvc_count: $(q -n "$NS" get pvc --no-headers | wc -l)"
+    echo "configmap_keys: $(q -n "$NS" get configmap -o go-template='{{range .items}}{{range $k, $v := .data}}{{$k}} {{end}}{{end}}' | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')"
+    ds=$(q -n "$NS" get configmap -o go-template='{{range .items}}{{range $k, $v := .data}}{{$v}}{{"\n"}}{{end}}{{end}}' | grep -cE '^\s*-\s*name:' || true)
+    echo "datasource_entries_in_configmaps (approx): $ds"
+    echo "routes: $(q -n "$NS" get route --no-headers | wc -l), tls: $(q -n "$NS" get route -o jsonpath='{.items[*].spec.tls.termination}')"
+    echo "anonymous_access_in_config: $(q -n "$NS" get configmap -o go-template='{{range .items}}{{range $k, $v := .data}}{{$v}}{{end}}{{end}}' | grep -A3 -F '[auth.anonymous]' | grep -m1 -E '^\s*enabled' | tr -d ' ' || echo 'not found')"
+  fi
+
+  if [ "$MODE" = "target" ]; then
+    echo "network_type: $(q get network.config.openshift.io/cluster -o jsonpath='{.spec.networkType}')"
+    echo "nodes_total: $(q get nodes --no-headers | wc -l)"
+    zl=$(q get nodes -o go-template="{{range .items}}{{index .metadata.labels \"$ZONE_LABEL\"}}{{\"\n\"}}{{end}}")
+    nz=$(printf '%s\n' "$zl" | grep -v '^$' | grep -cv '<no value>' || true)
+    echo "zone_label: $ZONE_LABEL (nodes carrying it: $nz)"
+    # Zones anonymised as Z1, Z2... with node counts (workers / all).
+    i=0
+    for z in $(printf '%s\n' "$zl" | grep -v -e '^$' -e '<no value>' | sort -u); do
+      i=$((i + 1))
+      all=$(printf '%s\n' "$zl" | grep -cx "$z")
+      wk=$(q get nodes -l "node-role.kubernetes.io/worker,$ZONE_LABEL=$z" --no-headers | wc -l)
+      echo "  zone Z$i: nodes=$all workers=$wk"
+    done
+    echo "storage_classes: $(q get storageclass --no-headers | wc -l)"
+    q get storageclass -o jsonpath='{range .items[*]}{.provisioner}{" default="}{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}{" repl="}{.parameters.repl}{" sharedv4="}{.parameters.sharedv4}{" volumeBindingMode="}{.volumeBindingMode}{"\n"}{end}' \
+      | sort | uniq -c | sed 's/^ */  /'
+    echo "oauth_identity_provider_types: $(q get oauth cluster -o jsonpath='{.spec.identityProviders[*].type}')"
+    echo "groups_count: $(q get groups --no-headers | wc -l)"
+    echo "uwm_enabled_in_config: $(q -n openshift-monitoring get configmap cluster-monitoring-config -o jsonpath='{.data.config\.yaml}' | grep -c 'enableUserWorkload: true' || true)"
+    echo "uwm_pods_running: $(q -n openshift-user-workload-monitoring get pods --no-headers | grep -c Running || true)"
+    echo "router_ns_policy_group_label: $(q get ns openshift-ingress -o jsonpath='{.metadata.labels.policy-group\.network\.openshift\.io/ingress}')|$(q get ns openshift-ingress -o jsonpath='{.metadata.labels.network\.openshift\.io/policy-group}')"
+    echo "ingresscontrollers: $(q -n openshift-ingress-operator get ingresscontroller --no-headers | wc -l), with_namespace_selector: $(q -n openshift-ingress-operator get ingresscontroller -o jsonpath='{range .items[*]}{.spec.namespaceSelector}{"\n"}{end}' | grep -c . || true)"
+    mirrors=$( (q get imagedigestmirrorset,imagetagmirrorset -o yaml; q get imagecontentsourcepolicy -o yaml) | grep -E '^\s*-?\s*source:' )
+    echo "mirror_for_docker.io: $(printf '%s\n' "$mirrors" | grep -c 'docker.io' || true)"
+    echo "mirror_for_registry.redhat.io: $(printf '%s\n' "$mirrors" | grep -c 'registry.redhat.io' || true)"
+    echo "mirror_for_quay.io: $(printf '%s\n' "$mirrors" | grep -c 'quay.io' || true)"
+    echo "image_config_allowed_registries_set: $(q get image.config.openshift.io/cluster -o jsonpath='{.spec.registrySources.allowedRegistries}' | grep -c . || true)"
+    echo "target_namespace_exists: $(yn oc get namespace "$NS")"
+    echo "target_namespace_quota_or_limits: $(q -n "$NS" get resourcequota,limitrange --no-headers | wc -l)"
+    for r in deployments statefulsets networkpolicies routes.route.openshift.io servicemonitors.monitoring.coreos.com prometheusrules.monitoring.coreos.com cronjobs.batch; do
+      echo "can_create_${r%%.*}: $(q -n "$NS" auth can-i create "$r")"
+    done
+    echo "can_create_oauthclients (cluster): $(q auth can-i create oauthclients)"
+  fi
+} > "$SUM"
+
+# ======================================================================================
+# Pre-filled private values (target only). REAL values: stays on this machine,
+# git-ignored. Review it, then copy it to values/values-local.yaml.
+# ======================================================================================
+if [ "$MODE" = "target" ]; then
+  GEN="$ROOT/local/values-local.generated.yaml"
+  domain=$(q get ingresses.config/cluster -o jsonpath='{.spec.domain}')
+  oauth=$(q -n openshift-authentication get route oauth-openshift -o jsonpath='{.spec.host}')
+  api=$(oc whoami --show-server 2>/dev/null)
+  {
+    echo "# GENERATED by scripts/collect-facts.sh target on $(date -u +%Y-%m-%d) - REAL VALUES, never commit."
+    echo "# Review, then copy to values/values-local.yaml (git-ignored)."
+    echo
+    echo "# Data zones only: REMOVE the quorum zone from this list."
+    echo "affinity:"
+    echo "  nodeAffinity:"
+    echo "    requiredDuringSchedulingIgnoredDuringExecution:"
+    echo "      nodeSelectorTerms:"
+    echo "        - matchExpressions:"
+    echo "            - key: $ZONE_LABEL"
+    echo "              operator: In"
+    echo "              values:"
+    printf '%s\n' "$zl" | grep -v -e '^$' -e '<no value>' | sort -u | sed 's/^/                - /'
+    echo
+    echo "grafana.ini:"
+    echo "  server:"
+    echo "    root_url: https://grafana-$NS.$domain/"
+    echo "  auth.generic_oauth:"
+    echo "    auth_url: https://$oauth/oauth/authorize"
+    echo "    token_url: https://$oauth/oauth/token"
+    echo "    api_url: $api/apis/user.openshift.io/v1/users/~"
+    echo "    # Set the real group names:"
+    echo "    role_attribute_path: \"contains(groups[*], 'grafana-admins') && 'Admin' || contains(groups[*], 'grafana-editors') && 'Editor' || 'Viewer'\""
+    echo
+    echo "# Datasources: copy them from the current Grafana (same names and uids)."
+    echo "# See values/values-local.yaml.example for the format."
+  } > "$GEN"
+fi
+
+echo
+echo "Anonymised summary (safe to share):"
+echo "------------------------------------------------------------------"
+cat "$SUM"
+echo "------------------------------------------------------------------"
+echo "Saved to: $SUM"
+[ "$MODE" = "target" ] && echo "Pre-filled private values (REAL names, stays here): $GEN"
 echo
 echo "Done. Files are in: $OUT"
 echo "They contain real names: keep them local (./local/ is git-ignored)."

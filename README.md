@@ -116,8 +116,17 @@ scripts/collect-facts.sh target -n <namespace-for-new-grafana> --kubeconfig <kub
 ```
 
 Only `oc get`, `oc version`, `oc whoami` and `oc auth can-i` are used, and
-secret values are never read. Output goes to `local/collect-<mode>-<timestamp>/`
-and contains real names: keep it local.
+secret values are never read. Raw output goes to `local/collect-<mode>-<timestamp>/`
+and contains real names: it stays on the bastion.
+
+Two extra outputs make it unnecessary to copy anything out of the environment:
+
+- `summary.txt`, printed at the end: anonymised (counts, yes/no, generic types;
+  no hostname, cluster, namespace, node, zone, group name or IP). Safe to share.
+- `local/values-local.generated.yaml` (target run): your private values
+  pre-filled with the real zones, domain and OAuth URLs. Review it (remove the
+  quorum zone, set group names, add datasources) and copy it to
+  `values/values-local.yaml`. Never committed.
 
 - **source** answers: is the current Grafana on ephemeral storage, which
   volumes, ConfigMaps and routes it uses.
