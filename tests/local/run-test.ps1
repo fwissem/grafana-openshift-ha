@@ -271,18 +271,54 @@ if (-not $SkipDeploy) {
         # machine only, until its next restart.
         Exec 'podman' @('machine', 'ssh', 'sudo sysctl -w fs.inotify.max_user_instances=8192 fs.inotify.max_user_watches=524288') | Out-Null
 
+        # kind starts all node containers in parallel. On the WSL Podman machine
+        # (cgroupfs, parent group /sys/fs/cgroup/non-systemd/machine.slice) the
+        # runtimes race to enable cgroup controllers on that shared parent and one
+        # container randomly fails ("controller pids is not available", or
+        # "conmon bytes"). Enabling the controllers once, before kind starts,
+        # removes the race. Podman machine only, until its next restart.
+        $prep = @'
+set -u
+echo "cgroup manager: $(podman info --format '{{.Host.CgroupManager}}' 2>/dev/null)"
+echo "root controllers   : $(cat /sys/fs/cgroup/cgroup.controllers)"
+echo "root subtree_ctrl  : $(cat /sys/fs/cgroup/cgroup.subtree_control)"
+for parent in /sys/fs/cgroup/non-systemd /sys/fs/cgroup/machine.slice; do
+  [ -d "$parent" ] || continue
+  echo "== $parent"
+  echo "controllers        : $(cat $parent/cgroup.controllers)"
+  echo "subtree_control    : $(cat $parent/cgroup.subtree_control)"
+  echo "processes in group : $(wc -l < $parent/cgroup.procs)"
+done
+enable_controllers() {
+  dir="$1"
+  for c in $(cat "$dir/cgroup.controllers"); do
+    grep -qw "$c" "$dir/cgroup.subtree_control" || echo "+$c" > "$dir/cgroup.subtree_control" 2>/dev/null || echo "could not enable $c in $dir"
+  done
+}
+if [ -d /sys/fs/cgroup/non-systemd ]; then
+  enable_controllers /sys/fs/cgroup/non-systemd
+  mkdir -p /sys/fs/cgroup/non-systemd/machine.slice
+  enable_controllers /sys/fs/cgroup/non-systemd/machine.slice
+  echo "after: non-systemd subtree_control    : $(cat /sys/fs/cgroup/non-systemd/cgroup.subtree_control)"
+  echo "after: machine.slice subtree_control  : $(cat /sys/fs/cgroup/non-systemd/machine.slice/cgroup.subtree_control)"
+fi
+'@
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($prep -replace "`r", '')))
+        $p = Exec 'podman' @('machine', 'ssh', "echo $b64 | base64 -d | sudo sh")
+        Log "Podman cgroup preparation:`n$($p.Out)"
+
         Log "Creating kind cluster $Cluster (1 control plane, 2+2 workers in data zones, 1 in the quorum zone). First run downloads the node image."
         $created = $false
-        for ($attempt = 1; $attempt -le 3 -and -not $created; $attempt++) {
+        for ($attempt = 1; $attempt -le 5 -and -not $created; $attempt++) {
             $r = Exec 'kind' @('create', 'cluster', '--config', (Join-Path $PSScriptRoot 'kind-config.yaml'), '--wait', '5m')
             if ($r.Code -eq 0) { $created = $true; break }
-            Log "kind create cluster failed (attempt $attempt/3); collecting Podman diagnostics and retrying."
+            Log "kind create cluster failed (attempt $attempt/5); collecting Podman diagnostics and retrying."
             Exec 'podman' @('ps', '-a') | Out-Null
             Exec 'podman' @('machine', 'ssh', 'ulimit -a; sysctl fs.inotify fs.file-max kernel.pid_max; free -m; sudo dmesg | tail -n 40; sudo journalctl -n 60 --no-pager') | Out-Null
             Exec 'kind' @('delete', 'cluster', '--name', $Cluster) | Out-Null
             Start-Sleep -Seconds 10
         }
-        if (-not $created) { Log "ERROR: kind create cluster failed 3 times. See $LogFile"; exit 1 }
+        if (-not $created) { Log "ERROR: kind create cluster failed 5 times. See $LogFile"; exit 1 }
     } else {
         Log "Reusing kind cluster $Cluster"
     }
