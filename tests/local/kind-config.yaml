@@ -4,16 +4,33 @@
 # worker in a quorum zone where nothing of Grafana may run.
 #   zone-a, zone-b : data zones (Grafana, PostgreSQL, backups)
 #   zone-c         : quorum zone (must stay empty of Grafana workloads)
-# Grafana is published on http://localhost:3300 (NodePort 30300).
+#
+# Ports: with Podman on WSL, only ports bound to all interfaces inside the
+# Podman machine are forwarded to Windows localhost; ports bound to 127.0.0.1
+# inside the VM are not. So the API server and Grafana are published on
+# 0.0.0.0 inside the VM (not exposed on the Windows network: WSL forwards them
+# to Windows localhost only), and run-test.ps1 points kubectl at 127.0.0.1.
+#   Kubernetes API : https://127.0.0.1:6445
+#   Grafana        : http://localhost:3300 (NodePort 30300)
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: grafana-ha
+networking:
+  apiServerAddress: "0.0.0.0"
+  apiServerPort: 6445
+kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiServer:
+      certSANs:
+        - "127.0.0.1"
+        - "localhost"
 nodes:
   - role: control-plane
     extraPortMappings:
       - containerPort: 30300
         hostPort: 3300
-        listenAddress: "127.0.0.1"
+        listenAddress: "0.0.0.0"
         protocol: TCP
   - role: worker
     labels:

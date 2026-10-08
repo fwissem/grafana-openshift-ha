@@ -58,6 +58,7 @@ $ChartVersion = '13.3.1'
 $PortUrl      = 'http://localhost:3300'
 $Selector     = 'app.kubernetes.io/name=grafana,app.kubernetes.io/instance=grafana'
 $Replicas     = 4
+$ApiPort      = 6445   # kind-config.yaml networking.apiServerPort
 $DataZones    = @('zone-a', 'zone-b')
 $QuorumZone   = 'zone-c'
 $env:KIND_EXPERIMENTAL_PROVIDER = 'podman'
@@ -170,7 +171,9 @@ function Ensure-Secret([string]$Name, [hashtable]$Data) {
     foreach ($k in $Data.Keys) { $a += "--from-literal=$k=$($Data[$k])" }
     $yaml = (& kubectl --context $Ctx -n $Ns @a --dry-run=client -o yaml 2>&1) -join "`n"
     $r = ($yaml | & kubectl --context $Ctx -n $Ns apply -f - 2>&1 | ForEach-Object { "$_" }) -join "`n"
-    Add-Content -Path $LogFile -Value "> secret $Name : $r" -Encoding UTF8
+    $code = $LASTEXITCODE
+    Add-Content -Path $LogFile -Value "> secret $Name : $r [rc=$code]" -Encoding UTF8
+    if ($code -ne 0) { Log "ERROR: could not create secret $Name : $r"; Collect-Diagnostics; exit 1 }
 }
 
 function Helm-Deploy([string]$DatasourceFile) {
@@ -310,6 +313,20 @@ if (-not $SkipDeploy) {
     } else {
         Log "Reusing kind cluster $Cluster"
     }
+
+    # kind writes the API address it was given (0.0.0.0, see kind-config.yaml);
+    # Windows cannot connect to 0.0.0.0, so point kubectl at 127.0.0.1.
+    Exec 'kubectl' @('config', 'set-cluster', $Ctx, "--server=https://127.0.0.1:$ApiPort") | Out-Null
+    $apiOk = Wait-Until { (Exec 'kubectl' @('--context', $Ctx, 'get', '--raw', '/readyz')).Out -match 'ok' } 120 "Kubernetes API on 127.0.0.1:$ApiPort"
+    if (-not $apiOk) {
+        Log "ERROR: the Kubernetes API is not reachable from Windows on 127.0.0.1:$ApiPort. Collecting network diagnostics."
+        Exec 'podman' @('ps', '--format', '{{.Names}} {{.Ports}}') | Out-Null
+        Exec 'podman' @('machine', 'ssh', "ss -ltnp | grep -E ':($ApiPort|3300) ' ; curl -sk https://127.0.0.1:$ApiPort/readyz; echo") | Out-Null
+        $tnc = Test-NetConnection -ComputerName 127.0.0.1 -Port $ApiPort -WarningAction SilentlyContinue
+        Log "Windows -> 127.0.0.1:$ApiPort TcpTestSucceeded=$($tnc.TcpTestSucceeded)"
+        exit 1
+    }
+    Log "Kubernetes API reachable on https://127.0.0.1:$ApiPort"
 
     $nsYaml = (& kubectl --context $Ctx create namespace $Ns --dry-run=client -o yaml 2>&1) -join "`n"
     $nsYaml | & kubectl --context $Ctx apply -f - 2>&1 | Out-Null
