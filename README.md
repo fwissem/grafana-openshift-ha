@@ -102,20 +102,29 @@ scripts/check-anonymity.sh                           # run before every commit
 
 The script scans everything Git would publish and exits non-zero on a match.
 
-## Phase 1: collect facts from the cluster (read-only)
+## Phase 1: collect facts (read-only, from the RHEL bastion)
+
+The current Grafana and the new one are on **different clusters**, so the
+collection runs once per cluster, each with its own kubeconfig:
 
 ```bash
-oc whoami --show-server        # confirm you are on the intended cluster
-scripts/collect-facts.sh -o <namespace-of-the-current-grafana> -n <new-namespace>
+# cluster running the Grafana to replace
+scripts/collect-facts.sh source -n <namespace-of-current-grafana> --kubeconfig <kubeconfig-of-that-cluster>
+
+# cluster that will run the new Grafana
+scripts/collect-facts.sh target -n <namespace-for-new-grafana> --kubeconfig <kubeconfig-of-that-cluster>
 ```
 
-Only `oc get`, `oc version`, `oc whoami` and `oc auth can-i` are used. Output goes
-to `local/collect-<timestamp>/` and contains real names: keep it local.
+Only `oc get`, `oc version`, `oc whoami` and `oc auth can-i` are used, and
+secret values are never read. Output goes to `local/collect-<mode>-<timestamp>/`
+and contains real names: keep it local.
 
-What it answers: is the current Grafana on ephemeral storage, which storage
-classes and zones exist, how OAuth and groups are set up, whether User Workload
-Monitoring is on, where the cluster may pull images from, and what the current
-user is allowed to create.
+- **source** answers: is the current Grafana on ephemeral storage, which
+  volumes, ConfigMaps and routes it uses.
+- **target** answers: zone label and zone names, storage classes, router and
+  monitoring namespaces, OAuth setup and groups, User Workload Monitoring,
+  image mirrors (Docker Hub, registry.redhat.io), and what the current user is
+  allowed to create.
 
 ## Testing
 
