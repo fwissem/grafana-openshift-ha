@@ -155,6 +155,13 @@ powershell -ExecutionPolicy Bypass -File D:\grafana-openshift-ha\tests\local\run
 | T13 | backup, dashboard deleted, database restored, dashboard back |
 | T14 | no pod of the namespace, jobs and test pods included, ever ran in the quorum zone |
 
+Set a new admin password on the test cluster (letters and digits only; Grafana
+and the Secret are updated together, the password is only printed):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\grafana-openshift-ha\tests\local\reset-admin-password.ps1
+```
+
 Results go to `tests\local\out\results.txt` (git-ignored). Options:
 `-Recreate` (fresh cluster), `-SkipDeploy` (tests only), `-Destroy` (delete the cluster).
 

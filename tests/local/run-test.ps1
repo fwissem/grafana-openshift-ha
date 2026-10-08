@@ -164,7 +164,15 @@ function Get-SecretValue([string]$Name, [string]$Key) {
     return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
 }
 
-function New-Password { return ([guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N').Substring(0, 8)) }
+# Random password, letters A-Z a-z and digits 0-9 only (cryptographic RNG).
+function New-Password([int]$Len = 24) {
+    $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.ToCharArray()
+    $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
+    $b = New-Object byte[] 1
+    $sb = New-Object System.Text.StringBuilder
+    while ($sb.Length -lt $Len) { $rng.GetBytes($b); if ($b[0] -lt 248) { [void]$sb.Append($chars[$b[0] % 62]) } }
+    return $sb.ToString()
+}
 
 function Ensure-Secret([string]$Name, [hashtable]$Data) {
     $a = @('create', 'secret', 'generic', $Name)
