@@ -674,7 +674,7 @@ spec:
                 values:$zones
   containers:
     - name: probe
-      image: docker.io/library/postgres:18
+      image: quay.io/sclorg/postgresql-16-c9s:latest
       command: ["pg_isready", "-h", "grafana-postgresql", "-p", "5432", "-t", "8"]
 "@
     $r = ($yaml | & kubectl --context $Ctx -n $Ns apply -f - 2>&1 | ForEach-Object { "$_" }) -join "`n"

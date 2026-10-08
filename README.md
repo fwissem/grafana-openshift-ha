@@ -22,7 +22,7 @@ PostgreSQL, so any Grafana pod can be deleted at any time without losing anythin
 | Need | Choice |
 |---|---|
 | High availability | 4 Grafana replicas, 2 per data zone, never in the quorum zone; PodDisruptionBudget, rolling updates |
-| Persistence | PostgreSQL (StatefulSet on a replicated block volume) + scheduled dumps |
+| Persistence | PostgreSQL 16, Red Hat image (StatefulSet on a replicated block volume) + scheduled dumps |
 | Authentication | Grafana generic OAuth against the OpenShift OAuth server, groups mapped to roles |
 | Sharing without login | `auth.anonymous` as Viewer, limited to designated folders |
 | Datasources | Generated from a list in a private values file, with stable uids |
@@ -77,7 +77,7 @@ The chart is **not** stored in this repository. Download it by hand, untar it in
 | Chart | `grafana` from `grafana-community/helm-charts` | The Grafana chart moved there from `grafana/helm-charts` |
 | Chart version | 13.3.1 | Latest release on 2026-10-08; re-check on installation day |
 | Grafana version | 13.2.3 | Image `docker.io/grafana/grafana:13.2.3-distroless` |
-| PostgreSQL | `docker.io/library/postgres:18` | Digests to be pinned after the first validated pull |
+| PostgreSQL | `registry.redhat.io/rhel9/postgresql-16` | Red Hat image, built for OpenShift (arbitrary UID); needs the cluster pull secret or an internal mirror. Local test uses its community build `quay.io/sclorg/postgresql-16-c9s` |
 
 Download and untar the chart (Windows example; same commands on Linux):
 

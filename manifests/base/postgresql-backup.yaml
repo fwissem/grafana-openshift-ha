@@ -1,5 +1,5 @@
 # Daily logical backup of the Grafana database (pg_dump custom format) to a
-# dedicated volume, with retention.
+# dedicated volume, keeping the last KEEP_BACKUPS dumps.
 #
 # The backup volume is in the same cluster as the database: it protects against
 # a bad change or a corrupted database, not against losing the cluster. Copy the
@@ -61,7 +61,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: pg-dump
-              image: docker.io/library/postgres:18
+              image: registry.redhat.io/rhel9/postgresql-16:latest
               imagePullPolicy: IfNotPresent
               env:
                 - name: PGHOST
@@ -83,7 +83,8 @@ spec:
                     secretKeyRef:
                       name: grafana-db
                       key: database
-                - name: RETENTION_DAYS
+                # Number of dumps kept (one per day by default).
+                - name: KEEP_BACKUPS
                   value: "14"
               command:
                 - sh
@@ -95,7 +96,12 @@ spec:
                   pg_dump --format=custom --no-owner --file="${out}.tmp"
                   mv "${out}.tmp" "${out}"
                   echo "backup written: ${out} ($(wc -c < "${out}") bytes)"
-                  find /backup -name 'grafana-*.dump' -type f -mtime "+${RETENTION_DAYS}" -print -delete
+                  # Retention by count; coreutils only (no find/xargs in the image).
+                  i=0
+                  for f in $(ls -1t /backup/grafana-*.dump); do
+                    i=$((i + 1))
+                    if [ "$i" -gt "${KEEP_BACKUPS}" ]; then rm -f "$f"; echo "removed old backup: $f"; fi
+                  done
                   echo "backups kept:"
                   ls -l /backup
               resources:

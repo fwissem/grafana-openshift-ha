@@ -49,7 +49,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: pg-restore
-          image: docker.io/library/postgres:18
+          image: registry.redhat.io/rhel9/postgresql-16:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: BACKUP_FILE

@@ -6,9 +6,13 @@
 #
 # Runs in the two data zones only (never in the quorum zone).
 #
-# Runs with an arbitrary UID (OpenShift restricted-v2): the official image
-# handles a UID without a passwd entry (nss_wrapper) and only needs the data
-# directory to be writable, which fsGroup on the volume provides.
+# Image: Red Hat registry.redhat.io/rhel9/postgresql-16 (supported with the
+# OpenShift subscription, RHEL security errata). Built for OpenShift: runs with
+# the arbitrary UID of restricted-v2 (group 0 permissions, nss_wrapper) and
+# configures itself from the POSTGRESQL_* variables. registry.redhat.io needs
+# the cluster pull secret (or an internal mirror). Pin the digest in the overlay.
+# The kind test overlay swaps in quay.io/sclorg/postgresql-16-c9s, the community
+# build of the same image (same scripts and variables), which needs no login.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -54,49 +58,49 @@ spec:
           type: RuntimeDefault
       containers:
         - name: postgresql
-          image: docker.io/library/postgres:18
+          image: registry.redhat.io/rhel9/postgresql-16:latest
           imagePullPolicy: IfNotPresent
-          args:
-            - -c
-            - max_connections=150
-            - -c
-            - shared_buffers=128MB
           ports:
             - name: postgresql
               containerPort: 5432
               protocol: TCP
           env:
-            - name: POSTGRES_USER
+            - name: POSTGRESQL_USER
               valueFrom:
                 secretKeyRef:
                   name: grafana-db
                   key: username
-            - name: POSTGRES_PASSWORD
+            - name: POSTGRESQL_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: grafana-db
                   key: password
-            - name: POSTGRES_DB
+            - name: POSTGRESQL_DATABASE
               valueFrom:
                 secretKeyRef:
                   name: grafana-db
                   key: database
-            # PostgreSQL 18 image layout: volume at /var/lib/postgresql,
-            # cluster in a version-specific sub-directory (eases major upgrades).
-            - name: PGDATA
-              value: /var/lib/postgresql/18/docker
+            # 4 Grafana replicas x max_open_conn 25 = 100, plus backup/restore.
+            - name: POSTGRESQL_MAX_CONNECTIONS
+              value: "150"
+            - name: POSTGRESQL_SHARED_BUFFERS
+              value: 128MB
+            # Logs to the container output instead of files in the data volume.
+            - name: POSTGRESQL_LOG_DESTINATION
+              value: /dev/stderr
           readinessProbe:
             exec:
-              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+              command: ["/usr/libexec/check-container"]
+            initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             exec:
-              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
-            initialDelaySeconds: 30
+              command: ["/usr/libexec/check-container", "--live"]
+            initialDelaySeconds: 60
             periodSeconds: 20
-            timeoutSeconds: 5
+            timeoutSeconds: 10
             failureThreshold: 6
           resources:
             requests:
@@ -110,9 +114,9 @@ spec:
               drop: ["ALL"]
           volumeMounts:
             - name: data
-              mountPath: /var/lib/postgresql
+              mountPath: /var/lib/pgsql/data
             - name: run
-              mountPath: /var/run/postgresql
+              mountPath: /run/postgresql
             - name: shm
               mountPath: /dev/shm
       volumes:

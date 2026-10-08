@@ -32,7 +32,8 @@ Platform
   label: two data zones, and a third zone that only provides quorum. Grafana,
   PostgreSQL and the backup jobs must run in the two data zones only.
 - Workflow: I clone the repo from GitHub to a work laptop, then deploy from a
-  bastion with `oc` and `helm`.
+  RHEL Linux bastion with `oc` and `helm`. Every deployment script is bash for
+  RHEL 8/9 (no PowerShell, no Python); PowerShell is only the Windows local test.
 - Storage: Portworx 3.x. Shared (RWX) volumes must not be used for databases and
   must never be served from storageless nodes.
 - Pods run under the `restricted-v2` SCC (no fixed runAsUser / fsGroup).
@@ -60,9 +61,10 @@ Constraints for this project
 - Open-source Grafana only, no Enterprise licence.
 - No operator and no GitOps: manual installation. Keep the layout compatible with
   ArgoCD for a later move.
-- Images: official Docker Hub images under their standard names
-  (docker.io/grafana/grafana, docker.io/library/postgres, plus any sidecar or
-  exporter), pinned by tag and digest. Keep the registry prefix as one parameter
+- Images: Grafana from Docker Hub (docker.io/grafana/grafana); PostgreSQL from
+  Red Hat (registry.redhat.io/rhel9/postgresql-16, built for OpenShift and its
+  arbitrary UID; its community build quay.io/sclorg/postgresql-16-c9s for local
+  tests). Pinned by tag and digest. Keep the registry prefix as one parameter
   in the values so it can point at an internal proxy.
 - Helm chart: NOT stored in the repo. I download the Grafana chart archive by
   hand, untar it into `charts/grafana/` (git-ignored) and install from that local
@@ -80,9 +82,8 @@ Constraints for this project
 3. Database without an operator: a PostgreSQL StatefulSet on a Portworx replicated
    volume (replication factor 3), with a backup CronJob (logical dumps, retention)
    and a tested restore. State how long Grafana is unavailable when the database
-   node is lost and exactly how the pod gets rescheduled. Verify the official
-   postgres image runs under `restricted-v2` with an arbitrary UID; if not,
-   propose an alternative image. Document an external managed PostgreSQL as an
+   node is lost and exactly how the pod gets rescheduled. Use the Red Hat
+   rhel9/postgresql-16 image (runs under `restricted-v2` with an arbitrary UID). Document an external managed PostgreSQL as an
    alternative selected by values only.
 4. Authentication: Grafana generic OAuth against the OpenShift OAuth server of the
    cluster, OpenShift groups mapped to Admin / Editor / Viewer. No oauth-proxy

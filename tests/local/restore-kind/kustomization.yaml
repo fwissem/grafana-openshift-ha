@@ -7,6 +7,13 @@ namespace: grafana
 resources:
   - ../../../manifests/restore
 
+# Same image as production, community build: registry.redhat.io needs a Red Hat
+# login, quay.io/sclorg/postgresql-16-c9s does not (same scripts and variables).
+images:
+  - name: registry.redhat.io/rhel9/postgresql-16
+    newName: quay.io/sclorg/postgresql-16-c9s
+    newTag: latest
+
 patches:
   - target:
       kind: Job
