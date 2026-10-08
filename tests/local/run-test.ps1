@@ -228,8 +228,41 @@ function Stop-PortForward {
     }
 }
 
+# SSH tunnel Windows -> Podman machine. Rootful Podman on WSL publishes ports
+# with firewall redirects only (no listening socket), so WSL cannot forward them
+# to Windows. The tunnel uses Podman's own machine SSH key and port.
+$TunnelPidFile = Join-Path $Out 'tunnel.pid'
+function Stop-Tunnel {
+    if (Test-Path $TunnelPidFile) {
+        $tp = Get-Content $TunnelPidFile -ErrorAction SilentlyContinue
+        if ($tp) { Stop-Process -Id ([int]$tp) -Force -ErrorAction SilentlyContinue }
+        Remove-Item $TunnelPidFile -Force -ErrorAction SilentlyContinue
+    }
+}
+function Start-Tunnel {
+    Stop-Tunnel
+    $info = (Exec 'podman' @('machine', 'inspect', '--format', '{{.SSHConfig.IdentityPath}}|{{.SSHConfig.Port}}|{{.SSHConfig.RemoteUsername}}|{{.Rootful}}')).Out.Trim()
+    $parts = $info -split '\|'
+    if ($parts.Count -lt 4) { Log "ERROR: cannot read the Podman machine SSH settings: $info"; return $false }
+    $key = $parts[0]; $port = $parts[1]; $user = $parts[2]
+    if ($parts[3] -eq 'true') { $user = 'root' }
+    $sshArgs = @('-N', '-i', "`"$key`"", '-p', $port,
+              '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=NUL',
+              '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=30', '-o', 'LogLevel=ERROR',
+              '-L', "127.0.0.1:${ApiPort}:127.0.0.1:${ApiPort}",
+              '-L', '127.0.0.1:3300:127.0.0.1:3300',
+              "$user@127.0.0.1")
+    Add-Content -Path $LogFile -Value "> ssh $($sshArgs -join ' ')" -Encoding UTF8
+    $proc = Start-Process -FilePath 'ssh' -ArgumentList $sshArgs -WindowStyle Hidden -PassThru
+    Set-Content -Path $TunnelPidFile -Value $proc.Id
+    Start-Sleep -Seconds 3
+    if ($proc.HasExited) { Log "ERROR: SSH tunnel to the Podman machine exited (code $($proc.ExitCode))."; return $false }
+    Log "SSH tunnel to the Podman machine started (pid $($proc.Id)): 127.0.0.1:$ApiPort and 127.0.0.1:3300"
+    return $true
+}
+
 # --- 0. Prerequisites ----------------------------------------------------------
-foreach ($tool in @('podman', 'kind', 'kubectl', 'helm')) {
+foreach ($tool in @('podman', 'kind', 'kubectl', 'helm', 'ssh')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
         Log "ERROR: '$tool' not found in PATH. Open a new PowerShell window after installing it."
         exit 2
@@ -238,6 +271,7 @@ foreach ($tool in @('podman', 'kind', 'kubectl', 'helm')) {
 
 if ($Destroy) {
     Log "Deleting kind cluster $Cluster"
+    Stop-Tunnel
     Exec 'kind' @('delete', 'cluster', '--name', $Cluster) | Out-Null
     Log 'Done.'
     exit 0
@@ -315,7 +349,9 @@ if (-not $SkipDeploy) {
     }
 
     # kind writes the API address it was given (0.0.0.0, see kind-config.yaml);
-    # Windows cannot connect to 0.0.0.0, so point kubectl at 127.0.0.1.
+    # Windows cannot connect to 0.0.0.0, so point kubectl at 127.0.0.1, which the
+    # SSH tunnel forwards to the Podman machine.
+    if (-not (Start-Tunnel)) { exit 1 }
     Exec 'kubectl' @('config', 'set-cluster', $Ctx, "--server=https://127.0.0.1:$ApiPort") | Out-Null
     $apiOk = Wait-Until { (Exec 'kubectl' @('--context', $Ctx, 'get', '--raw', '/readyz')).Out -match 'ok' } 120 "Kubernetes API on 127.0.0.1:$ApiPort"
     if (-not $apiOk) {
@@ -354,6 +390,10 @@ if (-not $SkipDeploy) {
     if ($r.Code -ne 0) { Log "ERROR: helm upgrade failed: $($r.Out)"; Collect-Diagnostics; exit 1 }
 }
 
+if ($SkipDeploy) {
+    if (-not (Start-Tunnel)) { exit 1 }
+    Exec 'kubectl' @('config', 'set-cluster', $Ctx, "--server=https://127.0.0.1:$ApiPort") | Out-Null
+}
 $adminPw = Get-SecretValue 'grafana-admin' 'admin-password'
 if (-not $adminPw) { Log 'ERROR: secret grafana-admin not found. Run without -SkipDeploy.'; exit 1 }
 $script:AuthB64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:$adminPw"))
@@ -665,6 +705,7 @@ Stop-PortForward
 Write-Summary
 Write-Host ''
 Write-Host "Grafana stays up at $script:BaseUrl (user admin, password in secret grafana-admin)."
+Write-Host "The SSH tunnel (pid in $TunnelPidFile) stays open for that; -Destroy closes it."
 Write-Host "Delete the test cluster with: powershell -ExecutionPolicy Bypass -File $(Join-Path $PSScriptRoot 'run-test.ps1') -Destroy"
 $failed = @($Results | Where-Object { $_.Status -eq 'FAIL' }).Count
 if ($failed -gt 0) { exit 1 } else { exit 0 }

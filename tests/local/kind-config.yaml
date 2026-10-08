@@ -5,11 +5,10 @@
 #   zone-a, zone-b : data zones (Grafana, PostgreSQL, backups)
 #   zone-c         : quorum zone (must stay empty of Grafana workloads)
 #
-# Ports: with Podman on WSL, only ports bound to all interfaces inside the
-# Podman machine are forwarded to Windows localhost; ports bound to 127.0.0.1
-# inside the VM are not. So the API server and Grafana are published on
-# 0.0.0.0 inside the VM (not exposed on the Windows network: WSL forwards them
-# to Windows localhost only), and run-test.ps1 points kubectl at 127.0.0.1.
+# Ports: rootful Podman on WSL publishes container ports with firewall
+# redirects inside the Podman machine, with no listening socket, so WSL does not
+# forward them to Windows. run-test.ps1 opens an SSH tunnel through the Podman
+# machine instead (Podman's own SSH key), and points kubectl at 127.0.0.1.
 #   Kubernetes API : https://127.0.0.1:6445
 #   Grafana        : http://localhost:3300 (NodePort 30300)
 kind: Cluster
