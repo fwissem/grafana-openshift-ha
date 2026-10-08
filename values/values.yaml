@@ -237,6 +237,10 @@ grafana.ini:
     max_idle_conn: 10
     conn_max_lifetime: 14400
     migration_locking: true      # only one replica runs schema migrations
+    # When several replicas start together (after a restore, or after all pods
+    # were deleted), the others wait up to 5 minutes for that lock instead of
+    # exiting at once and being restarted by Kubernetes.
+    locking_attempt_timeout_sec: 300
 
   remote_cache:
     type: database

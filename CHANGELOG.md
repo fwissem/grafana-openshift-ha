@@ -55,6 +55,9 @@ Changes that affect users of this repository. Dates are UTC.
 - Grafana no longer downloads unused app plugins (Logs, Traces and Profiles
   Drilldown, Advisor) at every start. The local test showed each new pod doing it.
 - The local test diagnostics show why a restarted Grafana container stopped.
+- Replicas that start together wait for the migration lock
+  (`locking_attempt_timeout_sec: 300`) instead of exiting with "failed to obtain
+  lock" and being restarted. Found with the new diagnostics after a restore.
 
 ## 2026-10-08 - local test stage
 
