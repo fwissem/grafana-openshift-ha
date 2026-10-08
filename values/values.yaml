@@ -207,11 +207,19 @@ grafana.ini:
     feedback_links_enabled: false
   news:
     news_feed_enabled: false
-  # Grafana downloads a set of app plugins from grafana.com at every start by
-  # default. The cluster has no Internet access and the pods keep no disk, so
-  # turn it off: every replica then starts with the same bundled plugins.
+  # Plugins. The pods keep no disk, so Grafana installs these at every start,
+  # before it serves anything, at the exact versions below: every replica runs
+  # the same versions. If a download fails, that pod does not start (the other
+  # replicas keep serving). To download from an internal mirror instead of
+  # grafana.com, set PLUGIN_MIRROR_URL in deploy.env (see docs/PLUGINS.md).
+  #   grafana-polystat-panel        one hexagon per cluster, fleet overview
+  #   grafana-metricsdrilldown-app  browse Prometheus metrics without PromQL
   plugins:
-    preinstall_disabled: true
+    preinstall_sync: grafana-polystat-panel@2.1.16,grafana-metricsdrilldown-app@2.5.1
+    preinstall_auto_update: false
+    # App plugins Grafana would otherwise download at every start. They need
+    # Loki, Tempo or Pyroscope, which this platform does not use.
+    disable_plugins: grafana-lokiexplore-app,grafana-exploretraces-app,grafana-pyroscope-app,grafana-advisor-app
   log:
     mode: console
     level: info

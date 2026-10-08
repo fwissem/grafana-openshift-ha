@@ -16,6 +16,7 @@
 #   A06 OpenShift login offered/redirects  A13 restore brings a deleted dashboard back
 #   A07 anonymous: shared yes, restricted no; same content on every replica
 #   A14 no pod of the namespace outside the data zones
+#   A15 plugins: pinned versions on every replica, unused app plugins absent
 #
 # Usage (RHEL bastion):
 #   tests/openshift/acceptance.sh [--env local/deploy.env] [--with-restore]
@@ -259,6 +260,23 @@ fi
 outside_pods="$(ocn get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.nodeName}{"\n"}{end}' \
   | while read -r p nd; do if [ -n "$nd" ] && ! is_data_zone "$(zone_of "$nd")"; then echo "$p"; fi; done)"
 [ -z "$outside_pods" ] && result A14 PASS "no pod of $NAMESPACE outside the data zones" || result A14 FAIL "outside the data zones: $outside_pods"
+
+# A15 plugins pinned in values/plugins.lock, on every replica (30 requests).
+plugin_bad=""
+for _ in $(seq 1 30); do
+  while read -r pid pver _; do
+    case "$pid" in ''|'#'*) continue ;; esac
+    api GET "/api/plugins/$pid/settings" >/dev/null
+    got="$(jq -r '.info.version // "missing"' "$TMP/body" 2>/dev/null || echo missing)"
+    [ "$got" = "$pver" ] || plugin_bad="$plugin_bad $pid=$got(expected $pver)"
+  done < "$REPO_ROOT/values/plugins.lock"
+done
+for off in grafana-advisor-app grafana-lokiexplore-app; do
+  [ "$(api GET "/api/plugins/$off/settings")" != 200 ] || plugin_bad="$plugin_bad $off-installed"
+done
+plugin_bad="$(tr ' ' '\n' <<< "$plugin_bad" | sort -u | tr '\n' ' ' | sed 's/^ *//')"
+if [ -z "$plugin_bad" ]; then result A15 PASS "plugins of values/plugins.lock on 30/30 requests, unused app plugins absent"
+else result A15 FAIL "plugins: $plugin_bad"; fi
 
 echo "PASS $PASS  WARN $WARN  FAIL $FAIL" | tee -a "$REPORT"
 log "Report: $REPORT (no secret inside)"

@@ -30,6 +30,12 @@ jobs:
       - name: no CRLF in shell scripts
         run: |
           if grep -rlI $'\r' --include='*.sh' .; then echo "CRLF found"; exit 1; fi
+      - name: plugin list in values.yaml matches values/plugins.lock
+        run: |
+          from_values="$(sed -n 's/^ *preinstall_sync: *//p' values/values.yaml | tr ',' '\n' | sort)"
+          from_lock="$(awk '!/^#/ && NF >= 3 {print $1 "@" $2}' values/plugins.lock | sort)"
+          echo "values.yaml: $from_values"; echo "plugins.lock: $from_lock"
+          [ "$from_values" = "$from_lock" ]
       - name: yamllint
         run: |
           pip install --quiet yamllint

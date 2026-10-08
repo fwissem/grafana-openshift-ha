@@ -29,6 +29,7 @@ and permissions are still there.
 | Exposure | A Route with edge TLS that redirects HTTP to HTTPS, and NetworkPolicies that deny ingress by default |
 | Monitoring | A ServiceMonitor and alert rules for User Workload Monitoring |
 | Migration | Scripts to export dashboards, folders, permissions and datasources from an existing Grafana and import them here |
+| Plugins | Polystat and Metrics Drilldown at pinned versions, the same on every replica, downloaded from grafana.com or an internal mirror ([docs/PLUGINS.md](docs/PLUGINS.md)) |
 
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the design and what happens when a pod, a node, a zone or the database fails.
 
@@ -39,6 +40,7 @@ and permissions are still there.
 | Grafana Helm chart | 13.3.1 (`grafana-community/helm-charts`) | not stored here, you download it by hand |
 | Grafana | 13.2.3 | `docker.io/grafana/grafana:13.2.3-distroless` |
 | PostgreSQL | 16 | `registry.redhat.io/rhel9/postgresql-16` (local tests use `quay.io/sclorg/postgresql-16-c9s`) |
+| Plugins | Polystat 2.1.16, Metrics Drilldown 2.5.1 | listed in `values/plugins.lock` |
 | OpenShift | 4.18 (Kubernetes 1.31) or later | |
 | Deployment machine | RHEL 8 or 9 with `oc`, `helm` 3 or 4, `curl` and `jq` | |
 
@@ -83,6 +85,7 @@ anything.
 ├── values/
 │   ├── values.yaml                  public defaults (HA, PostgreSQL, anonymous access, alerting HA)
 │   ├── values-openshift.yaml        restricted-v2 SCC, OpenShift OAuth
+│   ├── plugins.lock                 plugin versions and checksums
 │   └── values-local.yaml.example    template for the private values (datasources)
 ├── manifests/
 │   ├── base/                        PostgreSQL, its NetworkPolicy, backup CronJob
@@ -98,12 +101,13 @@ anything.
 │   ├── db-backup-now.sh             run a backup now
 │   ├── db-backup-fetch.sh           copy dumps out of the cluster
 │   ├── db-restore.sh                restore a dump
+│   ├── fetch-plugins.sh             download the plugins for an internal mirror
 │   ├── check-anonymity.sh           blocks private strings before a commit
 │   └── lib/                         shared bash helpers
 ├── tests/
 │   ├── openshift/acceptance.sh      acceptance test on a real cluster
 │   └── local/                       functional test on kind (Windows and Podman)
-├── docs/                            ARCHITECTURE, RUNBOOK, PROMPT (the original specification)
+├── docs/                            ARCHITECTURE, RUNBOOK, PLUGINS, PROMPT (the original specification)
 ├── deploy.env.example               template for the private settings
 ├── .githooks/pre-commit             anonymity and secret checks
 └── .github/workflows/ci.yml         lint, secret scan, rendering and schema validation
@@ -134,7 +138,7 @@ cp .anonymity-denylist.example .anonymity-denylist   # then list your private st
 | Level | Where | What it checks |
 |---|---|---|
 | Static | CI, on every push | shellcheck, yamllint, gitleaks, kustomize and Helm rendering, Kubernetes schema validation |
-| Functional | kind on a Windows workstation with Podman ([tests/local](tests/local)) | 14 checks covering replicas and zones, PostgreSQL state, alerting HA, anonymous access, deletion of every pod, a datasource added with Helm, pod and zone loss under load, the PostgreSQL NetworkPolicy, backup and restore, and an empty quorum zone |
+| Functional | kind on a Windows workstation with Podman ([tests/local](tests/local)) | 15 checks covering replicas and zones, PostgreSQL state, alerting HA, anonymous access, deletion of every pod, a datasource added with Helm, pod and zone loss under load, the PostgreSQL NetworkPolicy, backup and restore, an empty quorum zone, and the plugin versions on every replica |
 | Acceptance | non-production OpenShift (`tests/openshift/acceptance.sh`) | the same checks on the real platform, plus the Route certificate and the OAuth redirect |
 
 To run the local functional test on Windows, in PowerShell:

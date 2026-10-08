@@ -22,6 +22,7 @@
     T12  NetworkPolicy: only labelled clients reach PostgreSQL
     T13  backup, simulated loss, restore: dashboard is back
     T14  no pod of the namespace (jobs and test pods included) in the quorum zone
+    T15  plugins: pinned versions on every replica, unused app plugins absent
 
   Everything it creates lives in the kind cluster. It changes nothing else.
   Results: tests\local\out\results.txt   Full log: tests\local\out\run-test.log
@@ -741,6 +742,30 @@ if ($allPods) {
 $total = 0; if ($allPods) { $total = @($allPods.items).Count }
 if ($inQuorum.Count -eq 0) { Result 'T14' 'quorum zone empty' 'PASS' "0 of $total pods in namespace $Ns ran in $QuorumZone" }
 else { Result 'T14' 'quorum zone empty' 'FAIL' "pods in ${QuorumZone}: $($inQuorum -join ', ')" }
+
+# T15 plugins: the versions pinned in values.yaml answer on every replica (30
+# requests through the Service, new connection each time), and the app plugins
+# turned off with disable_plugins are absent.
+$valuesText = Get-Content -Raw -Path (Join-Path $Root 'values\values.yaml')
+$pinned = @()
+if ($valuesText -match '(?m)^\s*preinstall_sync:\s*(\S+)') { $pinned = $Matches[1].Split(',') }
+$problems = @()
+if ($pinned.Count -eq 0) { $problems += 'no preinstall_sync list found in values.yaml' }
+for ($i = 0; $i -lt 30; $i++) {
+    foreach ($entry in $pinned) {
+        $id, $ver = $entry.Split('@')[0, 1]
+        $r = Api 'GET' "/api/plugins/$id/settings"
+        $got = if ($r.Json) { $r.Json.info.version } else { "HTTP $($r.Status)" }
+        if ($got -ne $ver) { $problems += "$id=$got (expected $ver)" }
+    }
+}
+foreach ($off in @('grafana-advisor-app', 'grafana-lokiexplore-app')) {
+    $r = Api 'GET' "/api/plugins/$off/settings"
+    if ($r.Status -eq 200) { $problems += "$off is installed" }
+}
+$problems = @($problems | Sort-Object -Unique)
+if ($problems.Count -eq 0) { Result 'T15' 'plugins' 'PASS' "$($pinned -join ', ') on 30/30 requests; disabled apps absent" }
+else { Result 'T15' 'plugins' 'FAIL' ($problems -join '; ') }
 
 # --- Wrap up -------------------------------------------------------------------
 Collect-Diagnostics

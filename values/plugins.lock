@@ -1,0 +1,6 @@
+# Plugins installed by Grafana at start. Keep in sync with
+# grafana.ini.plugins.preinstall_sync in values/values.yaml (CI checks it).
+# SHA-256 of the archive published on grafana.com (package "any").
+# id                            version  sha256
+grafana-polystat-panel          2.1.16   2f1ba0edd2f7dc8e550edc04e5c64b6ba2f208e305db8e044d863f391be77537
+grafana-metricsdrilldown-app    2.5.1    becac36d08519001d96b204509533bceef5b3238be23b5cef80c592facb44da5

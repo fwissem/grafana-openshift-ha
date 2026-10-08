@@ -22,6 +22,10 @@ The cluster must be able to pull two images, directly or through a mirror:
 `docker.io/grafana/grafana:13.2.3-distroless` and
 `registry.redhat.io/rhel9/postgresql-16`.
 
+The Grafana pods also download two plugins when they start, from grafana.com
+by default. If pods cannot reach grafana.com, set up the mirror described in
+[PLUGINS.md](PLUGINS.md) before installing.
+
 ## 1. Collect facts (read-only)
 
 ```bash

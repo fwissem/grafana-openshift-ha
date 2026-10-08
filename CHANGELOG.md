@@ -13,6 +13,10 @@ Changes that affect users of this repository. Dates are UTC.
   `db-backup-fetch.sh` to copy dumps off the cluster, `export-grafana.sh` and
   `import-grafana.sh`.
 - `tests/openshift/acceptance.sh`, an acceptance test for a real cluster.
+- Plugins Polystat 2.1.16 and Metrics Drilldown 2.5.1, pinned in
+  `values/plugins.lock`, installed by each pod at start from grafana.com or an
+  internal mirror (`PLUGIN_MIRROR_URL`, `scripts/fetch-plugins.sh`). Tests T15
+  and A15 check the versions on every replica.
 - The private settings file `local/deploy.env`, built from
   `deploy.env.example` and pre-filled by `collect-facts.sh target`.
 - Security and contribution guides, a pre-commit hook, CI (lint, secret scan,
@@ -48,8 +52,8 @@ Changes that affect users of this repository. Dates are UTC.
 - Smaller fixes: sessions limited to 24 hours, PDB lets unhealthy pods be
   evicted, pods restart when datasource tokens change, CI actions pinned to
   commit SHAs and kubeconform checked against its checksum.
-- Grafana no longer downloads app plugins from grafana.com at every start
-  (`preinstall_disabled`). The local test showed each new pod doing it.
+- Grafana no longer downloads unused app plugins (Logs, Traces and Profiles
+  Drilldown, Advisor) at every start. The local test showed each new pod doing it.
 - The local test diagnostics show why a restarted Grafana container stopped.
 
 ## 2026-10-08 - local test stage

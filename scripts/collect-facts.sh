@@ -273,6 +273,7 @@ if [ "$MODE" = "target" ]; then
     echo
     echo "POSTGRES_IMAGE=\"registry.redhat.io/rhel9/postgresql-16:latest\""
     echo "GRAFANA_IMAGE_REGISTRY=\"\""
+    echo "PLUGIN_MIRROR_URL=\"\""
     echo
     echo "ROUTE_HOST=\"grafana-$NS.$domain\""
     echo "OAUTH_HOST=\"$oauth\""
