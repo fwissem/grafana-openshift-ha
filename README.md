@@ -5,9 +5,10 @@ PostgreSQL, login through OpenShift OAuth, and anonymous read-only access to the
 folders you choose to share. No operator, no GitOps requirement: plain Helm and
 `oc`, installed by hand.
 
-> **Status: skeleton.** The repository layout, the anonymity guard, the read-only
-> fact collection and the local test pre-check are in place. Values files,
-> manifests, dashboards and the runbook come next (see [Roadmap](#roadmap)).
+> **Status: local test stage.** Helm values, PostgreSQL manifests (with backup
+> and restore) and an automated local test on kind are in place. OpenShift
+> manifests (Route, OAuth client, NetworkPolicies), dashboards and the runbook
+> come next (see [Roadmap](#roadmap)).
 
 ## What this project fixes
 
@@ -42,10 +43,18 @@ with no data loss. An external managed PostgreSQL can be selected by values inst
 ├── scripts/
 │   ├── check-anonymity.sh        # blocks private strings before commit/push
 │   └── collect-facts.sh          # phase 1: read-only facts from the cluster
+├── values/
+│   ├── values.yaml               # public defaults: HA, PostgreSQL, anonymous, alerting HA
+│   ├── values-openshift.yaml     # restricted-v2 SCC, OpenShift OAuth (draft)
+│   └── values-local.yaml.example # template of the private values (URLs, datasources)
+├── manifests/
+│   ├── base/                     # PostgreSQL StatefulSet, services, NetworkPolicy, backup CronJob
+│   ├── overlays/kind/            # local test cluster (arbitrary UID like OpenShift)
+│   └── restore/                  # restore Job, applied on purpose only
 ├── tests/local/
-│   └── check-prereqs.sh          # what the local test machine has
-├── values/                       # Helm values (public defaults + examples)   [next]
-├── manifests/                    # PostgreSQL, Route, NetworkPolicies, ...    [next]
+│   ├── kind-config.yaml          # 1 control plane + 3 workers in 3 zones
+│   ├── run-test.ps1              # automated functional test (Windows + Podman)
+│   └── ...
 ├── dashboards/                   # provisioned dashboards (JSON)              [next]
 └── charts/                       # NOT in Git: untarred Grafana chart goes here
 ```
@@ -61,9 +70,17 @@ The chart is **not** stored in this repository. Download it by hand, untar it in
 | Item | Value | Note |
 |---|---|---|
 | Chart | `grafana` from `grafana-community/helm-charts` | The Grafana chart moved there from `grafana/helm-charts` |
-| Chart version | 13.2.5 | To be re-checked on the day of installation |
-| Grafana version | 13.2.2 | appVersion of that chart |
-| Images | `docker.io/grafana/grafana`, `docker.io/library/postgres` | Tags and digests are pinned in the values files (next step) |
+| Chart version | 13.3.1 | Latest release on 2026-10-08; re-check on installation day |
+| Grafana version | 13.2.3 | Image `docker.io/grafana/grafana:13.2.3-distroless` |
+| PostgreSQL | `docker.io/library/postgres:18` | Digests to be pinned after the first validated pull |
+
+Download and untar the chart (Windows example; same commands on Linux):
+
+```powershell
+helm repo add grafana-community https://grafana-community.github.io/helm-charts
+helm repo update grafana-community
+helm pull grafana-community/grafana --version 13.3.1 --untar --untardir D:\grafana-openshift-ha\charts
+```
 
 The image registry prefix is a single parameter, so it can point at an internal
 proxy of Docker Hub on an air-gapped cluster.
@@ -103,18 +120,44 @@ user is allowed to create.
 | 2. Functional | local Kubernetes (kind) on a workstation | persistence across pod deletion, adding a datasource, anonymous access, several replicas on one database, backup and restore |
 | 3. Platform | non-production OpenShift | Route, OpenShift OAuth, `restricted-v2` SCC, storage, zone spread |
 
-Check what the local test machine has (read-only):
+### Local functional test (Windows, Podman Desktop, kind)
 
-```bash
-bash tests/local/check-prereqs.sh
+Prerequisites: Podman Desktop with a running machine, `kind`, `kubectl` and
+`helm` (`winget install --id Kubernetes.kind -e`, `Kubernetes.kubectl`,
+`Helm.Helm`), and the chart untarred in `charts\grafana`. Check them with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\grafana-openshift-ha\tests\local\check-podman.ps1
 ```
+
+Run the test (creates or reuses the kind cluster `grafana-ha`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\grafana-openshift-ha\tests\local\run-test.ps1
+```
+
+| Test | What it proves |
+|---|---|
+| T01-T02 | 3 replicas ready, spread over 3 zones |
+| T03 | state in PostgreSQL, no Grafana volume |
+| T04 | alerting cluster formed between replicas |
+| T05-T07 | folders, dashboards, user, permissions; anonymous sees the shared folder only; same content on every replica |
+| T08 | every Grafana pod deleted at once: nothing lost |
+| T09 | a datasource added with `helm upgrade`: pods rolled, nothing lost (the original defect) |
+| T10 | one pod killed while clients poll: no failed request |
+| T11 | only labelled clients reach PostgreSQL |
+| T12 | backup, dashboard deleted, database restored, dashboard back |
+
+Results go to `tests\local\out\results.txt` (git-ignored). Options:
+`-Recreate` (fresh cluster), `-SkipDeploy` (tests only), `-Destroy` (delete the cluster).
 
 ## Roadmap
 
 - [x] Skeleton, anonymity guard, fact collection, local pre-check
+- [x] Values files, PostgreSQL manifests, backup and restore
+- [x] Local functional test (kind) - written, first run pending
 - [ ] Architecture note and design choices
-- [ ] Values files, PostgreSQL and platform manifests, install / secrets scripts
-- [ ] Local functional test (kind)
+- [ ] OpenShift overlay (Route, OAuthClient, NetworkPolicies, ServiceMonitor), install / secrets scripts
 - [ ] Dashboards: Grafana health, PostgreSQL, fleet overview, capacity, nodes and upgrades, control plane, storage
 - [ ] Runbook, migration from an existing instance, acceptance tests
 

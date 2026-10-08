@@ -1,0 +1,23 @@
+# Only pods labelled grafana-db-client=true (Grafana, backup and restore jobs)
+# in this namespace may open connections to PostgreSQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana-postgresql
+  labels:
+    app.kubernetes.io/name: grafana-postgresql
+    app.kubernetes.io/part-of: grafana
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana-postgresql
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              grafana-db-client: "true"
+      ports:
+        - port: 5432
+          protocol: TCP

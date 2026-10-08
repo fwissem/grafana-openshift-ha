@@ -1,0 +1,59 @@
+# values-local.yaml.example - template for YOUR private values.
+#
+#   cp values/values-local.yaml.example values/values-local.yaml
+#
+# values-local.yaml is git-ignored: real hostnames, cluster names, group names
+# and datasource uids go there and nowhere else. No secret either: tokens are
+# referenced as $__env{DS_TOKEN_...} and stored in the Secret
+# grafana-datasource-tokens (scripts/create-secrets.sh).
+
+# Internal registry proxying Docker Hub (air-gapped clusters).
+# global:
+#   imageRegistry: registry.example.com/dockerhub
+
+grafana.ini:
+  server:
+    root_url: https://grafana.apps.cluster.example.com/
+
+  auth.generic_oauth:
+    auth_url: https://oauth-openshift.apps.cluster.example.com/oauth/authorize
+    token_url: https://oauth-openshift.apps.cluster.example.com/oauth/token
+    api_url: https://api.cluster.example.com:6443/apis/user.openshift.io/v1/users/~
+    role_attribute_path: "contains(groups[*], 'grafana-admins') && 'Admin' || contains(groups[*], 'grafana-editors') && 'Editor' || 'Viewer'"
+
+# One Thanos / Prometheus datasource per cluster, named like the cluster.
+# Keep the uids of the instance you replace: dashboards reference them.
+# This list REPLACES the whole list on each install: keep every datasource in it.
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    prune: true            # datasources removed from this list are removed from Grafana
+    datasources:
+      - name: cluster-a
+        uid: REPLACE_WITH_CURRENT_UID_A
+        type: prometheus
+        access: proxy
+        url: https://thanos-querier-openshift-monitoring.apps.cluster-a.example.com
+        isDefault: true
+        editable: false
+        jsonData:
+          httpMethod: POST
+          timeInterval: 30s
+          httpHeaderName1: Authorization
+          tlsAuthWithCACert: false
+          tlsSkipVerify: false
+        secureJsonData:
+          httpHeaderValue1: Bearer $__env{DS_TOKEN_CLUSTER_A}
+
+      - name: cluster-b
+        uid: REPLACE_WITH_CURRENT_UID_B
+        type: prometheus
+        access: proxy
+        url: https://thanos-querier-openshift-monitoring.apps.cluster-b.example.com
+        editable: false
+        jsonData:
+          httpMethod: POST
+          timeInterval: 30s
+          httpHeaderName1: Authorization
+        secureJsonData:
+          httpHeaderValue1: Bearer $__env{DS_TOKEN_CLUSTER_B}

@@ -1,0 +1,30 @@
+# values-kind.yaml - local test only, layered on top of values/values.yaml.
+
+# Published on http://localhost:3300 through the kind port mapping.
+service:
+  type: NodePort
+  nodePort: 30300
+
+# Mimic OpenShift restricted-v2: an arbitrary high UID, never 472 or root.
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000700000
+  runAsGroup: null
+  fsGroup: 1000700000
+  seccompProfile:
+    type: RuntimeDefault
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+grafana.ini:
+  server:
+    root_url: http://localhost:3300/
+  security:
+    cookie_secure: false
+  log:
+    level: info

@@ -1,0 +1,24 @@
+# kind cluster for the local functional test.
+#
+# 1 control plane + 3 workers, one per zone, so the zone spread of the Grafana
+# replicas and the loss of one node can be tested.
+# Grafana is published on http://localhost:3300 (NodePort 30300).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: grafana-ha
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30300
+        hostPort: 3300
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-a
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-b
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-c

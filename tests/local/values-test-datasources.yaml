@@ -1,0 +1,20 @@
+# Test datasources (step 1): two clusters. The URLs do not exist; the test only
+# checks provisioning, not queries.
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    prune: true
+    datasources:
+      - name: test-cluster-a
+        uid: test-cluster-a
+        type: prometheus
+        access: proxy
+        url: http://prometheus-a.invalid:9090
+        isDefault: true
+        editable: false
+      - name: test-cluster-b
+        uid: test-cluster-b
+        type: prometheus
+        access: proxy
+        url: http://prometheus-b.invalid:9090
+        editable: false

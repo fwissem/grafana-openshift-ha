@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Restore job for the kind test cluster: same arbitrary UID as PostgreSQL.
+namespace: grafana
+
+resources:
+  - ../../../manifests/restore
+
+patches:
+  - target:
+      kind: Job
+      name: grafana-db-restore
+    patch: |-
+      - op: add
+        path: /spec/template/spec/securityContext/runAsUser
+        value: 1000700000
+      - op: add
+        path: /spec/template/spec/securityContext/fsGroup
+        value: 1000700000

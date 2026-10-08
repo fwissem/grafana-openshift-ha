@@ -1,0 +1,226 @@
+# values.yaml - public defaults for an HA Grafana backed by PostgreSQL.
+#
+# Chart : grafana  (grafana-community/helm-charts)  version 13.3.1
+# App   : Grafana 13.2.3
+#
+# Layering (later files win):
+#   values/values.yaml               this file: platform-neutral defaults
+#   values/values-openshift.yaml     OpenShift specifics (SCC, OAuth)
+#   values-local.yaml                PRIVATE, git-ignored: URLs, datasources, groups
+#
+# Secrets are never in values. The chart only references Kubernetes Secrets
+# created beforehand (see scripts/create-secrets.sh):
+#   grafana-admin        admin-user, admin-password      (break-glass local admin)
+#   grafana-db           username, password, database    (shared with PostgreSQL)
+#   grafana-secret-key   secret-key                      (same on every replica)
+#   grafana-datasource-tokens   optional, one key per datasource token (DS_TOKEN_*)
+
+# -- Image ---------------------------------------------------------------------
+global:
+  # Set to an internal proxy of Docker Hub on air-gapped clusters,
+  # e.g. "registry.example.com/dockerhub". Applies to every image of the chart.
+  imageRegistry: null
+
+image:
+  registry: docker.io
+  repository: grafana/grafana
+  tag: "13.2.3-distroless"
+  # Pin the digest once the image has been pulled and validated:
+  #   podman image inspect docker.io/grafana/grafana:13.2.3-distroless --format '{{.Digest}}'
+  sha: ""
+  pullPolicy: IfNotPresent
+
+# -- High availability -----------------------------------------------------------
+replicas: 3
+
+# Headless service used by unified alerting to gossip between replicas (port 9094).
+headlessService: true
+
+deploymentStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+podDisruptionBudget:
+  maxUnavailable: 1
+
+# One replica per node (hard) and spread over zones (soft, so a lost zone never
+# blocks rescheduling). Tainted nodes (control plane, cordoned nodes) are not
+# counted, otherwise they would block the hostname spread.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    nodeTaintsPolicy: Honor
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: grafana
+        app.kubernetes.io/instance: grafana
+    matchLabelKeys:
+      - pod-template-hash
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+    nodeTaintsPolicy: Honor
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: grafana
+        app.kubernetes.io/instance: grafana
+    matchLabelKeys:
+      - pod-template-hash
+
+# Let the load balancer stop sending traffic before Grafana shuts down.
+# (Native sleep action: the distroless image has no shell or sleep binary.)
+lifecycleHooks:
+  preStop:
+    sleep:
+      seconds: 10
+
+# First start on an empty database runs the schema migrations (a few minutes).
+startupProbe:
+  httpGet:
+    path: /api/health
+    port: grafana
+  periodSeconds: 10
+  failureThreshold: 60
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 384Mi
+  limits:
+    memory: 1Gi
+
+# Label that the PostgreSQL NetworkPolicy uses to allow database clients.
+podLabels:
+  grafana-db-client: "true"
+
+# -- State: nothing on local disk ------------------------------------------------
+# All state lives in PostgreSQL. /var/lib/grafana is an emptyDir (cache only).
+persistence:
+  enabled: false
+initChownData:
+  enabled: false
+
+# -- Security hardening ----------------------------------------------------------
+# No Kubernetes API access is needed (no sidecars).
+rbac:
+  create: false
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+automountServiceAccountToken: false
+enableServiceLinks: false
+testFramework:
+  enabled: false
+
+# -- Credentials, all from existing Secrets --------------------------------------
+admin:
+  existingSecret: grafana-admin
+  userKey: admin-user
+  passwordKey: admin-password
+
+envValueFrom:
+  GF_DATABASE_USER:
+    secretKeyRef:
+      name: grafana-db
+      key: username
+  GF_DATABASE_PASSWORD:
+    secretKeyRef:
+      name: grafana-db
+      key: password
+  GF_DATABASE_NAME:
+    secretKeyRef:
+      name: grafana-db
+      key: database
+  # Encrypts datasource secrets in the database: must be identical on all
+  # replicas and must never change after the first start.
+  GF_SECURITY_SECRET_KEY:
+    secretKeyRef:
+      name: grafana-secret-key
+      key: secret-key
+
+# Datasource tokens, referenced in datasource definitions as $__env{DS_TOKEN_X}.
+envFromSecrets:
+  - name: grafana-datasource-tokens
+    optional: true
+
+# -- Datasources -----------------------------------------------------------------
+# Defined in the private values-local.yaml (see values-local.yaml.example).
+# Changing them changes a checksum on the pods: Helm rolls the replicas one by
+# one, and nothing is lost because every dashboard lives in PostgreSQL.
+datasources: {}
+
+# -- grafana.ini -----------------------------------------------------------------
+# Merged with the chart defaults. String values are rendered with Helm `tpl`.
+grafana.ini:
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+    check_for_plugin_updates: false
+    feedback_links_enabled: false
+  news:
+    news_feed_enabled: false
+  log:
+    mode: console
+    level: info
+
+  server:
+    # Set root_url in values-local.yaml, e.g. https://grafana.apps.example.com/
+    enforce_domain: false
+
+  database:
+    type: postgres
+    host: grafana-postgresql:5432
+    # name / user / password come from the GF_DATABASE_* environment variables.
+    ssl_mode: disable            # in-cluster traffic; use "require" for an external database
+    max_open_conn: 25            # x3 replicas = 75, below max_connections=150
+    max_idle_conn: 10
+    conn_max_lifetime: 14400
+    migration_locking: true      # only one replica runs schema migrations
+
+  remote_cache:
+    type: database
+
+  security:
+    cookie_secure: true
+    cookie_samesite: lax
+    disable_gravatar: true
+    # secret_key comes from GF_SECURITY_SECRET_KEY.
+
+  users:
+    allow_sign_up: false
+    allow_org_create: false
+    auto_assign_org: true
+    auto_assign_org_role: Viewer
+
+  auth:
+    disable_login_form: false    # keeps the local break-glass admin usable
+    oauth_auto_login: false
+
+  # Read-only access without login, on the main organisation. What anonymous
+  # users see is governed by folder permissions granted to the Viewer role.
+  auth.anonymous:
+    enabled: true
+    org_name: Main Org.
+    org_role: Viewer
+    hide_version: true
+
+  # Sharing is done with anonymous access, not with "Share externally".
+  public_dashboards:
+    enabled: false
+  snapshots:
+    external_enabled: false
+
+  dashboards:
+    versions_to_keep: 20
+    min_refresh_interval: 10s
+
+  # Alertmanager state shared between replicas (gossip over the headless service).
+  unified_alerting:
+    enabled: true
+    ha_peers: '{{ include "grafana.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:9094'
+    ha_listen_address: '$__env{POD_IP}:9094'
+    ha_advertise_address: '$__env{POD_IP}:9094'
+    ha_peer_timeout: 15s

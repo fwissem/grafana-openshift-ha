@@ -1,0 +1,26 @@
+# Test datasources (step 2): a third cluster is added. This reproduces the
+# operation that used to lose every UI-created dashboard.
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    prune: true
+    datasources:
+      - name: test-cluster-a
+        uid: test-cluster-a
+        type: prometheus
+        access: proxy
+        url: http://prometheus-a.invalid:9090
+        isDefault: true
+        editable: false
+      - name: test-cluster-b
+        uid: test-cluster-b
+        type: prometheus
+        access: proxy
+        url: http://prometheus-b.invalid:9090
+        editable: false
+      - name: test-cluster-c
+        uid: test-cluster-c
+        type: prometheus
+        access: proxy
+        url: http://prometheus-c.invalid:9090
+        editable: false

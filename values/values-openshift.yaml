@@ -1,0 +1,67 @@
+# values-openshift.yaml - OpenShift specifics, layered on top of values.yaml.
+#
+# STATUS: the OAuth part is a first draft. It is validated in phase 1 against
+# the real cluster (user API attributes, groups, CA of the OAuth route).
+
+# -- restricted-v2 SCC -------------------------------------------------------------
+# OpenShift assigns the UID / fsGroup from the namespace range. Fixed IDs from
+# the chart defaults (472) would be rejected, so they are removed here.
+securityContext:
+  runAsNonRoot: true
+  runAsUser: null
+  runAsGroup: null
+  fsGroup: null
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Exposure ----------------------------------------------------------------------
+# The OpenShift Route is a plain manifest (manifests/overlays/openshift), the
+# chart service stays internal.
+service:
+  type: ClusterIP
+
+# -- Login with the OpenShift OAuth server -------------------------------------------
+# Needs: an OAuthClient named "grafana" (cluster-scoped, created by
+# scripts/create-secrets.sh) whose redirect URI is <root_url>login/generic_oauth,
+# and the Secret grafana-oauth (key client-secret) with the same secret.
+envValueFrom:
+  GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:
+    secretKeyRef:
+      name: grafana-oauth
+      key: client-secret
+
+grafana.ini:
+  auth.generic_oauth:
+    enabled: true
+    name: OpenShift
+    client_id: grafana
+    # client_secret comes from GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET.
+    scopes: user:info user:check-access
+    use_pkce: true
+    allow_sign_up: true
+    # Endpoints: set the real hosts in values-local.yaml.
+    auth_url: https://oauth-openshift.apps.cluster.example.com/oauth/authorize
+    token_url: https://oauth-openshift.apps.cluster.example.com/oauth/token
+    api_url: https://api.cluster.example.com:6443/apis/user.openshift.io/v1/users/~
+    # Attributes of the OpenShift User object returned by users/~.
+    login_attribute_path: metadata.name
+    name_attribute_path: fullName || metadata.name
+    # OpenShift users usually have no e-mail: fall back to the login name.
+    email_attribute_path: metadata.name
+    groups_attribute_path: groups
+    # Group names are placeholders: set the real ones in values-local.yaml.
+    role_attribute_path: "contains(groups[*], 'grafana-admins') && 'Admin' || contains(groups[*], 'grafana-editors') && 'Editor' || 'Viewer'"
+    role_attribute_strict: false
+    allow_assign_grafana_admin: false
+    skip_org_role_sync: false
+    # CA that signed the OAuth route and API server certificates, mounted below.
+    tls_client_ca: /etc/grafana/oauth-ca/ca.crt
+    tls_skip_verify_insecure: false
+
+# ConfigMap grafana-oauth-ca (key ca.crt) holds the CA bundle; created by
+# scripts/create-secrets.sh from the cluster's ingress and API CAs.
+extraConfigmapMounts:
+  - name: oauth-ca
+    mountPath: /etc/grafana/oauth-ca
+    configMap: grafana-oauth-ca
+    readOnly: true
