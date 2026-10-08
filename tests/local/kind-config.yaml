@@ -11,6 +11,11 @@
 # machine instead (Podman's own SSH key), and points kubectl at 127.0.0.1.
 #   Kubernetes API : https://127.0.0.1:6445
 #   Grafana        : http://localhost:3300 (NodePort 30300)
+#
+# Plugins: the data-zone workers share one folder of the Podman machine
+# (/var/lib/grafana-ha-plugins, created by run-test.ps1), mounted at
+# /shared/grafana-plugins. A hostPath PersistentVolume on it plays the role of
+# the ReadWriteMany volume grafana-plugins used on OpenShift.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: grafana-ha
@@ -34,15 +39,27 @@ nodes:
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-a
+    extraMounts:
+      - hostPath: /var/lib/grafana-ha-plugins
+        containerPath: /shared/grafana-plugins
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-a
+    extraMounts:
+      - hostPath: /var/lib/grafana-ha-plugins
+        containerPath: /shared/grafana-plugins
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-b
+    extraMounts:
+      - hostPath: /var/lib/grafana-ha-plugins
+        containerPath: /shared/grafana-plugins
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-b
+    extraMounts:
+      - hostPath: /var/lib/grafana-ha-plugins
+        containerPath: /shared/grafana-plugins
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-c

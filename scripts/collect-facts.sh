@@ -143,9 +143,6 @@ if [ "$MODE" = "target" ]; then
   run 80-image-config    oc get image.config.openshift.io/cluster -o yaml
   run 81-idms-itms       oc get imagedigestmirrorset,imagetagmirrorset -o yaml
   run 82-icsp            oc get imagecontentsourcepolicy -o yaml
-  # Internal registry and builds: the Grafana image with its plugins is built there.
-  run 83-image-registry  oc get configs.imageregistry.operator.openshift.io cluster -o "jsonpath={.spec.managementState}"
-  run 84-capabilities    oc get clusterversion version -o "jsonpath={.status.capabilities.enabledCapabilities}"
 
   # --- Security / network ---------------------------------------------------------------
   run 90-scc-restricted  oc get scc restricted-v2 -o yaml
@@ -238,12 +235,7 @@ q()  { oc "$@" 2>/dev/null; }
       echo "can_create_${r%%.*}: $(q -n "$NS" auth can-i create "$r")"
     done
     echo "can_create_oauthclients (cluster): $(q auth can-i create oauthclients)"
-    echo "image_registry_state: $(q get configs.imageregistry.operator.openshift.io cluster -o jsonpath='{.spec.managementState}' || echo unknown)"
-    echo "build_api_available: $(q api-resources --api-group=build.openshift.io --no-headers | grep -c . || true)"
-    echo "build_capability_enabled: $(q get clusterversion version -o jsonpath='{.status.capabilities.enabledCapabilities}' | grep -c Build || true)"
-    for r in buildconfigs.build.openshift.io imagestreams.image.openshift.io builds.build.openshift.io/docker; do
-      echo "can_create_${r%%.*}: $(q -n "$NS" auth can-i create "$r")"
-    done
+    echo "storage_classes_with_sharedv4 (ReadWriteMany candidates): $(q get storageclass -o jsonpath='{range .items[*]}{.parameters.sharedv4}{"\n"}{end}' | grep -c true || true)"
   fi
 } > "$SUM"
 
@@ -282,6 +274,8 @@ if [ "$MODE" = "target" ]; then
     echo
     echo "POSTGRES_IMAGE=\"registry.redhat.io/rhel9/postgresql-16:latest\""
     echo "GRAFANA_IMAGE_REGISTRY=\"\""
+    echo "PLUGINS_STORAGE_CLASS=\"CHANGE-ME-ReadWriteMany-class\""
+    echo "PLUGINS_VOLUME_SIZE=\"1Gi\""
     echo
     echo "ROUTE_HOST=\"grafana-$NS.$domain\""
     echo "OAUTH_HOST=\"$oauth\""

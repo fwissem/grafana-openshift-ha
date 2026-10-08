@@ -199,6 +199,54 @@ datasources: {}
 
 # -- grafana.ini -----------------------------------------------------------------
 # Merged with the chart defaults. String values are rendered with Helm `tpl`.
+# Plugins (Polystat, Metrics Drilldown). Grafana runs from the official image and
+# the cluster cannot reach grafana.com, so scripts/load-plugins.sh puts the
+# plugins of the repository on the ReadWriteMany volume grafana-plugins. At each
+# start, this init container copies the current set into the pod (emptyDir), so
+# running pods never depend on the shared volume. It uses the PostgreSQL image
+# that the deployment already pulls (install.sh sets the exact reference).
+pluginsCopyImage: registry.redhat.io/rhel9/postgresql-16:latest
+
+extraVolumes:
+  - name: plugins-source
+    existingClaim: grafana-plugins
+
+extraEmptyDirMounts:
+  - name: plugins
+    mountPath: /opt/grafana/plugins
+
+extraInitContainers:
+  - name: copy-plugins
+    image: "{{ .Values.pluginsCopyImage }}"
+    imagePullPolicy: IfNotPresent
+    command: ["/bin/sh", "-c"]
+    args:
+      - |
+        set -eu
+        if [ ! -s /plugins-source/live.hash ]; then
+          echo "no plugins on the volume grafana-plugins: run scripts/load-plugins.sh --apply" >&2
+          exit 1
+        fi
+        cp -R /plugins-source/live/. /opt/grafana/plugins/
+        echo "plugin set $(cat /plugins-source/live.hash) copied: $(ls /opt/grafana/plugins | tr '\n' ' ')"
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+    volumeMounts:
+      - name: plugins-source
+        mountPath: /plugins-source
+        readOnly: true
+      - name: plugins
+        mountPath: /opt/grafana/plugins
+
 grafana.ini:
   analytics:
     reporting_enabled: false
@@ -207,10 +255,9 @@ grafana.ini:
     feedback_links_enabled: false
   news:
     news_feed_enabled: false
-  # Plugins are baked into the image (image/Dockerfile, values/plugins.lock):
-  # Polystat and Metrics Drilldown. The cluster has no Internet access, so
-  # Grafana must not try to download anything at start (by default it fetches
-  # several app plugins from grafana.com).
+  # Plugins come from the volume grafana-plugins (see extraInitContainers). The
+  # cluster has no Internet access, so Grafana must not try to download
+  # anything at start (by default it fetches several app plugins).
   plugins:
     preinstall_disabled: true
     # Signatures are checked with the key built into Grafana instead of keys

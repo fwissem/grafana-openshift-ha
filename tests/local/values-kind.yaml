@@ -5,6 +5,9 @@ service:
   type: NodePort
   nodePort: 30300
 
+# Init container that copies the plugins: community build of the PostgreSQL image.
+pluginsCopyImage: quay.io/sclorg/postgresql-16-c9s:latest
+
 # Mimic OpenShift restricted-v2: an arbitrary high UID, never 472 or root.
 securityContext:
   runAsNonRoot: true

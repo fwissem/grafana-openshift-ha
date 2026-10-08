@@ -196,4 +196,4 @@ else
   warn "then delete that file (it contains the client secret)."
 fi
 
-log "Done. Next: scripts/build-image.sh --check"
+log "Done. Next: scripts/load-plugins.sh --check"

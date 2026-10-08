@@ -13,13 +13,14 @@ Changes that affect users of this repository. Dates are UTC.
   `db-backup-fetch.sh` to copy dumps off the cluster, `export-grafana.sh` and
   `import-grafana.sh`.
 - `tests/openshift/acceptance.sh`, an acceptance test for a real cluster.
-- Plugins Polystat 2.1.16 and Metrics Drilldown 2.5.1. The signed archives
-  are in `image/plugins/` and listed with their SHA-256 in
-  `values/plugins.lock`. `scripts/build-image.sh` bakes them into the Grafana
-  image with an OpenShift binary build in the internal registry, because the
-  clusters cannot reach grafana.com. CI builds the same image and checks that
-  each plugin loads, signed, at its version. Tests T15 and A15 check the
-  versions on every replica.
+- Plugins Polystat 2.1.16 and Metrics Drilldown 2.5.1, for clusters without
+  access to grafana.com and without building any image. The signed archives
+  are in `plugins/`, listed with their SHA-256 in `values/plugins.lock`.
+  `scripts/load-plugins.sh` copies them to the ReadWriteMany volume
+  `grafana-plugins`, and an init container copies them into each Grafana pod
+  at start. CI runs the official image with the plugins and checks that each
+  one loads, signed, at its version. Tests T15 and A15 check the versions on
+  every replica.
 - The private settings file `local/deploy.env`, built from
   `deploy.env.example` and pre-filled by `collect-facts.sh target`.
 - Security and contribution guides, a pre-commit hook, CI (lint, secret scan,

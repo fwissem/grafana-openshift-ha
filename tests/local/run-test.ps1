@@ -73,7 +73,6 @@ Set-Content -Path $LogFile -Value "run-test started $(Get-Date -Format s)" -Enco
 $script:BaseUrl = $PortUrl
 $script:AuthB64 = ''
 $script:PortForward = $null
-$script:ImageTag = ''
 $Results = New-Object System.Collections.ArrayList
 
 # --- Helpers -----------------------------------------------------------------
@@ -186,60 +185,89 @@ function Ensure-Secret([string]$Name, [hashtable]$Data) {
     if ($code -ne 0) { Log "ERROR: could not create secret $Name : $r"; Collect-Diagnostics; exit 1 }
 }
 
-# Tag of the Grafana image with its plugins: same rule as scripts/lib/common.sh
-# (base tag + hash of image/Dockerfile and values/plugins.lock).
-function Get-ImageInfo {
-    $df = Join-Path $Root 'image\Dockerfile'
-    $lock = Join-Path $Root 'values\plugins.lock'
-    $bytes = [IO.File]::ReadAllBytes($df) + [IO.File]::ReadAllBytes($lock)
+# Plugin set id: same rule as scripts/lib/common.sh plugins_hash.
+function Get-PluginsHash {
+    $bytes = [IO.File]::ReadAllBytes((Join-Path $Root 'values\plugins.lock'))
     $hash = [Security.Cryptography.SHA256]::Create().ComputeHash([byte[]]$bytes)
-    $hex = -join ($hash | ForEach-Object { $_.ToString('x2') })
-    $base = ((Get-Content $df | Where-Object { $_ -match '^ARG BASE_IMAGE=' }) -replace '^ARG BASE_IMAGE=', '').Trim()
-    return [pscustomobject]@{ Base = $base; Tag = "$($base.Split(':')[-1])-p$($hex.Substring(0, 10))" }
+    return (-join ($hash | ForEach-Object { $_.ToString('x2') })).Substring(0, 12)
 }
 
-# Build the Grafana image with the plugins (Podman) and load it into the kind
-# nodes, the local equivalent of scripts/build-image.sh.
-function Build-GrafanaImage {
-    $info = Get-ImageInfo
-    $script:ImageTag = $info.Tag
-    $name = "localhost/grafana-ha:$($info.Tag)"
-    $ctx = Join-Path $Out 'build'
-    Remove-Item -Recurse -Force $ctx -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path (Join-Path $ctx 'plugins') | Out-Null
-    Copy-Item (Join-Path $Root 'image\Dockerfile') $ctx
+# Put the plugins of the repository on the volume grafana-plugins, the local
+# equivalent of scripts/load-plugins.sh: check each archive, unpack it, copy it
+# into the volume through a short-lived pod, switch the set in one rename.
+function Load-Plugins {
+    $hash = Get-PluginsHash
+    $work = Join-Path $Out 'plugins'
+    Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+    $new = Join-Path $work 'new'
+    New-Item -ItemType Directory -Force -Path $new | Out-Null
     foreach ($line in Get-Content (Join-Path $Root 'values\plugins.lock')) {
         if ($line -match '^\s*(#|$)') { continue }
         $f = $line.Trim() -split '\s+'
-        $zip = Join-Path $Root "image\plugins\$($f[0])-$($f[1]).zip"
+        $zip = Join-Path $Root "plugins\$($f[0])-$($f[1]).zip"
         if (-not (Test-Path $zip)) { Log "ERROR: missing $zip"; return $false }
         $got = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
         if ($got -ne $f[2]) { Log "ERROR: $zip has SHA-256 $got, values\plugins.lock expects $($f[2])"; return $false }
-        Expand-Archive -Path $zip -DestinationPath (Join-Path $ctx 'plugins') -Force
+        Expand-Archive -Path $zip -DestinationPath $new -Force
         Log "Plugin $($f[0]) $($f[1]) unpacked (SHA-256 checked)"
     }
-    $r = Exec 'podman' @('build', '-t', $name, $ctx)
-    if ($r.Code -ne 0) { Log "ERROR: podman build failed: $($r.Out)"; return $false }
-    $tar = Join-Path $ctx 'grafana-image.tar'
-    $r = Exec 'podman' @('save', '-o', $tar, $name)
-    if ($r.Code -ne 0) { Log "ERROR: podman save failed: $($r.Out)"; return $false }
-    $r = Exec 'kind' @('load', 'image-archive', $tar, '--name', $Cluster)
-    if ($r.Code -ne 0) { Log "ERROR: kind load failed: $($r.Out)"; return $false }
-    Remove-Item -Force $tar -ErrorAction SilentlyContinue
-    Log "Image $name built and loaded into the kind nodes"
+    $r = Exec 'kubectl' @('--context', $Ctx, 'apply', '-f', (Join-Path $PSScriptRoot 'plugins-kind.yaml'))
+    if ($r.Code -ne 0) { Log "ERROR: could not create the plugins volume: $($r.Out)"; return $false }
+    $pod = 'grafana-plugins-loader'
+    K @('delete', 'pod', $pod, '--ignore-not-found', '--wait=true') | Out-Null
+    $manifest = @"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: $pod
+  namespace: $Ns
+spec:
+  restartPolicy: Never
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - {key: topology.kubernetes.io/zone, operator: In, values: [zone-a, zone-b]}
+  securityContext: {runAsNonRoot: true, runAsUser: 1000700000, seccompProfile: {type: RuntimeDefault}}
+  containers:
+    - name: loader
+      image: quay.io/sclorg/postgresql-16-c9s:latest
+      command: ["sleep", "1800"]
+      securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
+      volumeMounts:
+        - {name: plugins, mountPath: /plugins}
+  volumes:
+    - name: plugins
+      persistentVolumeClaim: {claimName: grafana-plugins}
+"@
+    $mf = Join-Path $work 'loader.yaml'
+    Set-Content -Path $mf -Value $manifest -Encoding UTF8
+    $r = K @('apply', '-f', $mf)
+    if ($r.Code -ne 0) { Log "ERROR: loader pod: $($r.Out)"; return $false }
+    $r = K @('wait', '--for=condition=Ready', "pod/$pod", '--timeout=300s')
+    if ($r.Code -ne 0) { Log 'ERROR: loader pod not ready'; return $false }
+    # kubectl cp reads "D:" as a pod name: copy with a relative path.
+    Push-Location $work
+    try { $r = K @('cp', 'new', "${pod}:/plugins/.new-$hash") } finally { Pop-Location }
+    if ($r.Code -ne 0) { Log "ERROR: kubectl cp failed: $($r.Out)"; K @('delete', 'pod', $pod, '--wait=false') | Out-Null; return $false }
+    $switch = "set -e; cd /plugins; chmod -R a+rX .new-$hash; rm -rf live.old; if [ -d live ]; then mv live live.old; fi; mv .new-$hash live; echo $hash > live.hash.tmp; mv live.hash.tmp live.hash; ls live"
+    $r = K @('exec', $pod, '--', 'sh', '-c', $switch)
+    K @('delete', 'pod', $pod, '--wait=false') | Out-Null
+    if ($r.Code -ne 0) { Log "ERROR: could not switch the plugin set: $($r.Out)"; return $false }
+    $cm = (& kubectl --context $Ctx -n $Ns create configmap grafana-plugins "--from-literal=hash=$hash" --dry-run=client -o yaml) -join "`n"
+    $cm | & kubectl --context $Ctx -n $Ns apply -f - | Out-Null
+    Log "Plugin set $hash on the volume grafana-plugins: $($r.Out -replace "`n", ' ')"
     return $true
 }
 
 function Helm-Deploy([string]$DatasourceFile) {
-    if (-not $script:ImageTag) { $script:ImageTag = (Get-ImageInfo).Tag }
     $a = @('upgrade', '--install', $Release, $ChartDir,
            '--kube-context', $Ctx, '--namespace', $Ns,
            '-f', (Join-Path $Root 'values\values.yaml'),
            '-f', (Join-Path $PSScriptRoot 'values-kind.yaml'),
            '-f', (Join-Path $PSScriptRoot $DatasourceFile),
-           '--set', 'image.registry=localhost', '--set', 'image.repository=grafana-ha',
-           '--set', "image.tag=$($script:ImageTag)", '--set', 'image.sha=',
-           '--set', 'image.pullPolicy=Never',
+           '--set', "podAnnotations.checksum/plugins=$(Get-PluginsHash)",
            '--wait', '--timeout', '15m')
     return Exec 'helm' $a
 }
@@ -362,6 +390,14 @@ if (-not (Test-Path $chartYaml) -or -not (Select-String -Path $chartYaml -Patter
 if (-not $SkipDeploy) {
     $clusters = (Exec 'kind' @('get', 'clusters')).Out
     $exists = ($clusters -split "`n" | ForEach-Object { $_.Trim() }) -contains $Cluster
+    # The data-zone workers mount a shared folder of the Podman machine for the
+    # plugins volume (kind-config.yaml extraMounts). A cluster created before
+    # that has no such mount: recreate it.
+    Exec 'podman' @('machine', 'ssh', 'sudo mkdir -p /var/lib/grafana-ha-plugins && sudo chmod 0777 /var/lib/grafana-ha-plugins') | Out-Null
+    if ($exists -and -not $Recreate) {
+        $m = Exec 'podman' @('exec', "$Cluster-worker", 'test', '-d', '/shared/grafana-plugins')
+        if ($m.Code -ne 0) { Log 'The kind cluster has no shared plugins folder (created by an older version): recreating it'; $Recreate = $true }
+    }
     if ($exists -and $Recreate) {
         Log "Deleting existing kind cluster $Cluster (-Recreate)"
         Exec 'kind' @('delete', 'cluster', '--name', $Cluster) | Out-Null
@@ -449,9 +485,9 @@ if (-not $SkipDeploy) {
     if ($r.Code -ne 0) { Log 'ERROR: PostgreSQL did not become ready.'; Collect-Diagnostics; exit 1 }
     Log 'PostgreSQL ready'
 
-    # --- 4. Grafana image with the plugins -------------------------------------
-    Log 'Building the Grafana image with its plugins (Podman) and loading it into kind'
-    if (-not (Build-GrafanaImage)) { Collect-Diagnostics; exit 1 }
+    # --- 4. Plugins on the shared volume ---------------------------------------
+    Log 'Loading the plugins on the volume grafana-plugins'
+    if (-not (Load-Plugins)) { Collect-Diagnostics; exit 1 }
 
     # --- 5. Grafana --------------------------------------------------------------
     Log "Deploying Grafana (helm upgrade --install, chart $ChartVersion). First start runs DB migrations."
@@ -796,7 +832,7 @@ $total = 0; if ($allPods) { $total = @($allPods.items).Count }
 if ($inQuorum.Count -eq 0) { Result 'T14' 'quorum zone empty' 'PASS' "0 of $total pods in namespace $Ns ran in $QuorumZone" }
 else { Result 'T14' 'quorum zone empty' 'FAIL' "pods in ${QuorumZone}: $($inQuorum -join ', ')" }
 
-# T15 plugins: the plugins baked into the image (values/plugins.lock) answer at
+# T15 plugins: the plugins of values/plugins.lock, copied from the volume, answer at
 # the right version on every replica (30 requests through the Service, new
 # connection each time), and the app plugins Grafana would download are absent.
 $pinned = @(Get-Content (Join-Path $Root 'values\plugins.lock') | Where-Object { $_ -notmatch '^\s*(#|$)' } |

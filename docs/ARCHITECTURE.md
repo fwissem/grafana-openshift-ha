@@ -41,6 +41,7 @@ follows its volume.
 | Login | Grafana uses generic OAuth against the OpenShift OAuth server and maps OpenShift groups to Admin, Editor or Viewer. The local `admin` account remains for break-glass access. |
 | Sharing | Anonymous users get the Viewer role on the main organisation. A folder is public when the Viewer role can see it. |
 | Datasources | They come from `values-local.yaml` with fixed uids. Adding one restarts the replicas one at a time and loses nothing. |
+| Plugins | Grafana runs from the official image. The plugins sit on the ReadWriteMany volume `grafana-plugins`, loaded from the repository by `load-plugins.sh`, and an init container copies them into each pod at start. Running pods do not depend on that volume. |
 
 ## Failure behaviour
 
@@ -52,6 +53,7 @@ follows its volume.
 | One data zone lost | The 2 replicas in the other zone keep serving, and the lost ones start again in that zone. Draining a zone in the test gave 0 failed requests out of 607. | Automatic. The replicas spread out again when the zone comes back. |
 | PostgreSQL node lost | Grafana returns errors until PostgreSQL restarts on another node. That takes 1 to 2 minutes, plus up to 5 minutes for Kubernetes to declare the node lost. | Automatic, and the replicated volume keeps the data. |
 | Corrupted database or bad change | Users see wrong content. | Run `scripts/db-restore.sh` with a daily dump. |
+| Plugins volume unavailable | Nothing for running pods. A pod that starts meanwhile waits in its init container. | Automatic when the volume is back. |
 | Cluster lost | The service is gone. | Deploy on another cluster and restore a dump that was copied off the cluster. |
 
 ## Options we ruled out

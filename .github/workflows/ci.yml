@@ -84,34 +84,35 @@ jobs:
           ./kubeconform -strict -summary -kubernetes-version 1.31.0 -ignore-missing-schemas -skip Route,ServiceMonitor,PrometheusRule \
             /tmp/kind.yaml /tmp/openshift.yaml /tmp/restore.yaml /tmp/grafana.yaml /tmp/grafana-kind.yaml
 
-  image:
-    name: Grafana image with plugins
+  plugins:
+    name: Plugins load in the official Grafana image
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: build the image as scripts/build-image.sh does, check every plugin loads
+      - name: unpack as load-plugins.sh does, run the official image, check every plugin
         run: |
           set -euo pipefail
           # Errors are also written as annotations, readable without repository rights.
           fail() { echo "::error::$1"; exit 1; }
           . scripts/lib/common.sh
-          mkdir -p /tmp/ctx/plugins
-          cp image/Dockerfile /tmp/ctx/
+          mkdir -p /tmp/plugins
           while read -r pid pver; do
-            unzip -q "image/plugins/$pid-$pver.zip" -d /tmp/ctx/plugins
+            unzip -q "plugins/$pid-$pver.zip" -d /tmp/plugins
           done < <(verify_plugin_archives)
-          docker build -t localhost/grafana-ha:ci /tmp/ctx > /tmp/build.log 2>&1 \
-            || fail "docker build: $(tail -n 5 /tmp/build.log | tr '\n' ' ')"
-          docker image inspect localhost/grafana-ha:ci > /dev/null || fail "image not in the local store after build"
+          chmod -R a+rX /tmp/plugins
+          image="$(sed -n 's/^  tag: "\(.*\)"$/\1/p' values/values.yaml | head -n 1)"
+          [ -n "$image" ] || fail "no image tag found in values/values.yaml"
           # Throwaway Grafana for this check only: anonymous users are Admin so the
-          # plugin API needs no credentials.
+          # plugin API needs no credentials. Plugins mounted read-only where the
+          # init container copies them in the cluster.
           docker run -d --name grafana-ci -p 3000:3000 \
+            -v /tmp/plugins:/opt/grafana/plugins:ro \
             -e GF_PATHS_PLUGINS=/opt/grafana/plugins \
             -e GF_PLUGINS_PREINSTALL_DISABLED=true \
             -e GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED=true \
             -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin \
-            localhost/grafana-ha:ci > /tmp/run.log 2>&1 || fail "docker run: $(tr '\n' ' ' < /tmp/run.log)"
+            "docker.io/grafana/grafana:$image" > /tmp/run.log 2>&1 || fail "docker run: $(tr '\n' ' ' < /tmp/run.log)"
           up=no
           for _ in $(seq 1 60); do
             if curl -fs http://localhost:3000/api/health > /dev/null; then up=yes; break; fi

@@ -1,5 +1,6 @@
-# Plugins baked into the Grafana image (image/Dockerfile). One line per plugin:
-# the archive image/plugins/<id>-<version>.zip must have this SHA-256.
+# Plugins loaded into the volume grafana-plugins by scripts/load-plugins.sh and
+# copied into each Grafana pod at start. One line per plugin: the archive
+# plugins/<id>-<version>.zip must have this SHA-256.
 # Both archives are signed by Grafana Labs (MANIFEST.txt); Grafana checks the
 # signature when it loads them.
 # id                            version  sha256                                                            source

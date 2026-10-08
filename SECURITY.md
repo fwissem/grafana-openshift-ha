@@ -65,8 +65,8 @@ can reach PostgreSQL.
 The route terminates TLS at the edge, redirects HTTP to HTTPS and Grafana sets
 secure cookies. Analytics, update checks, the news feed, plugin downloads and
 the retrieval of plugin signing keys are off, so Grafana makes no call to the
-Internet. The plugins are baked into the image from signed archives whose
-SHA-256 is checked before every build (docs/PLUGINS.md). Users log in through
+Internet. The plugins come from signed archives in the repository whose SHA-256
+is checked before they are loaded on the cluster (docs/PLUGINS.md). Users log in through
 OpenShift OAuth, and the local admin account remains only for break-glass
 access.
 

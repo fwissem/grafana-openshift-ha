@@ -1,0 +1,42 @@
+# Local test only: the volume grafana-plugins on kind. On OpenShift it is a
+# ReadWriteMany PVC created by scripts/load-plugins.sh; here a hostPath
+# PersistentVolume on the folder that every data-zone worker mounts
+# (kind-config.yaml extraMounts) gives the same sharing.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: grafana-plugins-kind
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: grafana
+    name: grafana-plugins
+  hostPath:
+    path: /shared/grafana-plugins
+    type: Directory
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values: ["zone-a", "zone-b"]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-plugins
+  namespace: grafana
+  labels:
+    app.kubernetes.io/name: grafana-plugins
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  volumeName: grafana-plugins-kind
+  resources:
+    requests:
+      storage: 1Gi

@@ -29,7 +29,7 @@ and permissions are still there.
 | Exposure | A Route with edge TLS that redirects HTTP to HTTPS, and NetworkPolicies that deny ingress by default |
 | Monitoring | A ServiceMonitor and alert rules for User Workload Monitoring |
 | Migration | Scripts to export dashboards, folders, permissions and datasources from an existing Grafana and import them here |
-| Plugins | Polystat and Metrics Drilldown, stored in the repository and baked into the Grafana image by an OpenShift build, so no pod downloads anything ([docs/PLUGINS.md](docs/PLUGINS.md)) |
+| Plugins | Polystat and Metrics Drilldown, stored in the repository, loaded on a shared volume and copied into each pod at start. Grafana runs from the official image and downloads nothing ([docs/PLUGINS.md](docs/PLUGINS.md)) |
 
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the design and what happens when a pod, a node, a zone or the database fails.
 
@@ -38,9 +38,9 @@ and permissions are still there.
 | Component | Version | Image |
 |---|---|---|
 | Grafana Helm chart | 13.3.1 (`grafana-community/helm-charts`) | not stored here, you download it by hand |
-| Grafana | 13.2.3 | `docker.io/grafana/grafana:13.2.3-distroless` plus the plugins, built in the cluster as `grafana:<tag>` |
+| Grafana | 13.2.3 | `docker.io/grafana/grafana:13.2.3-distroless` |
 | PostgreSQL | 16 | `registry.redhat.io/rhel9/postgresql-16` (local tests use `quay.io/sclorg/postgresql-16-c9s`) |
-| Plugins | Polystat 2.1.16, Metrics Drilldown 2.5.1 | archives in `image/plugins/`, listed in `values/plugins.lock` |
+| Plugins | Polystat 2.1.16, Metrics Drilldown 2.5.1 | archives in `plugins/`, listed in `values/plugins.lock` |
 | OpenShift | 4.18 (Kubernetes 1.31) or later | |
 | Deployment machine | RHEL 8 or 9 with `oc`, `helm` 3 or 4, `curl` and `jq` | |
 
@@ -67,9 +67,9 @@ mv local/deploy.env.generated local/deploy.env
 GRAFANA_USER=admin scripts/export-grafana.sh --url https://<current-grafana>
 cp values/values-local.yaml.example values/values-local.yaml   # paste the exported datasources
 
-# 4. Create the secrets, build the image with the plugins, install, validate, import
+# 4. Create the secrets, load the plugins, install, validate, import
 scripts/create-secrets.sh --check && scripts/create-secrets.sh --apply
-scripts/build-image.sh --check    && scripts/build-image.sh --apply
+scripts/load-plugins.sh --check   && scripts/load-plugins.sh --apply
 scripts/install.sh --check        && scripts/install.sh --apply
 tests/openshift/acceptance.sh
 GRAFANA_USER=admin scripts/import-grafana.sh --dir exports/<timestamp> --url https://<new-route> --apply
@@ -88,9 +88,7 @@ anything.
 │   ├── values-openshift.yaml        restricted-v2 SCC, OpenShift OAuth
 │   ├── plugins.lock                 plugin versions and checksums
 │   └── values-local.yaml.example    template for the private values (datasources)
-├── image/
-│   ├── Dockerfile                   official Grafana image plus the plugins
-│   └── plugins/                     plugin archives (signed by Grafana Labs)
+├── plugins/                         plugin archives (signed by Grafana Labs)
 ├── manifests/
 │   ├── base/                        PostgreSQL, its NetworkPolicy, backup CronJob
 │   ├── overlays/openshift/          Route, NetworkPolicies, ServiceMonitor, alert rules
@@ -105,7 +103,7 @@ anything.
 │   ├── db-backup-now.sh             run a backup now
 │   ├── db-backup-fetch.sh           copy dumps out of the cluster
 │   ├── db-restore.sh                restore a dump
-│   ├── build-image.sh               build the Grafana image with the plugins (OpenShift build)
+│   ├── load-plugins.sh              put the plugins on the shared volume grafana-plugins
 │   ├── check-anonymity.sh           blocks private strings before a commit
 │   └── lib/                         shared bash helpers
 ├── tests/

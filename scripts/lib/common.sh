@@ -70,7 +70,7 @@ load_env() {
   for v in EXPECTED_API_SERVER NAMESPACE RELEASE ZONE_LABEL DATA_ZONES REPLICAS \
            STORAGE_CLASS BACKUP_STORAGE_CLASS DB_VOLUME_SIZE BACKUP_VOLUME_SIZE \
            POSTGRES_IMAGE ROUTE_HOST OAUTH_HOST GRAFANA_ADMIN_GROUP GRAFANA_EDITOR_GROUP \
-           UWM_ENABLED CHART_VERSION; do
+           UWM_ENABLED CHART_VERSION PLUGINS_STORAGE_CLASS PLUGINS_VOLUME_SIZE; do
     [ -n "${!v:-}" ] || die "$v is empty in $env_file"
   done
   GRAFANA_IMAGE_REGISTRY="${GRAFANA_IMAGE_REGISTRY:-}"
@@ -154,29 +154,21 @@ apply_secret() {
 }
 
 # ------------------------------------------------------------------------------
-# Grafana image with baked-in plugins (image/Dockerfile, values/plugins.lock).
+# Plugins (plugins/*.zip, listed in values/plugins.lock), served to the Grafana
+# pods from the volume grafana-plugins (scripts/load-plugins.sh).
 # ------------------------------------------------------------------------------
-IMAGE_DIR="$REPO_ROOT/image"
+PLUGINS_DIR="$REPO_ROOT/plugins"
 PLUGINS_LOCK="$REPO_ROOT/values/plugins.lock"
 
-# Official image the build starts from, e.g. docker.io/grafana/grafana:13.2.3-distroless
-grafana_base_image() { sed -n 's/^ARG BASE_IMAGE=//p' "$IMAGE_DIR/Dockerfile"; }
-
-# Tag of the built image: base tag + a hash of the Dockerfile and the plugin list,
-# so any change to either gives a new tag, and the same inputs the same tag.
-grafana_image_tag() {
-  local base h
-  base="$(grafana_base_image)"
-  h="$(cat "$IMAGE_DIR/Dockerfile" "$PLUGINS_LOCK" | sha256sum | cut -c1-10)"
-  printf '%s-p%s\n' "${base##*:}" "$h"
-}
+# Identifies a plugin set: changes whenever values/plugins.lock changes.
+plugins_hash() { sha256sum "$PLUGINS_LOCK" | cut -c1-12; }
 
 # Check every archive of plugins.lock against its SHA-256. Prints "id version" lines.
 verify_plugin_archives() {
   local pid pver psum _rest f got n=0
   while read -r pid pver psum _rest; do
     case "$pid" in ''|'#'*) continue ;; esac
-    f="$IMAGE_DIR/plugins/$pid-$pver.zip"
+    f="$PLUGINS_DIR/$pid-$pver.zip"
     [ -r "$f" ] || die "missing $f (listed in values/plugins.lock)"
     got="$(sha256sum "$f" | cut -d' ' -f1)"
     [ "$got" = "$psum" ] || die "$f: SHA-256 is $got, values/plugins.lock expects $psum"
