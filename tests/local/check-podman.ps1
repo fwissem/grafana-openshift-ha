@@ -25,12 +25,16 @@ $lines += Run-Step 'WSL'              { wsl --status; wsl -l -v }
 $lines += Run-Step 'podman version'   { podman version }
 $lines += Run-Step 'podman machines'  { podman machine list }
 $lines += Run-Step 'podman machine inspect' { podman machine inspect --format "{{.Name}} cpus={{.Resources.CPUs}} memMiB={{.Resources.Memory}} diskGiB={{.Resources.DiskSize}} rootful={{.Rootful}} state={{.State}}" }
-$lines += Run-Step 'podman info (host)' { podman info --format "os={{.Host.OS}} kernel={{.Host.Kernel}} cgroups={{.Host.CgroupsVersion}} rootless={{.Host.Security.Rootless}}" }
+$lines += Run-Step 'podman info (host)' { podman info --format "os={{.Host.OS}} kernel={{.Host.Kernel}} cgroups={{.Host.CgroupsVersion}} rootless={{.Host.Security.Rootless}} cpus={{.Host.CPUs}} memTotalBytes={{.Host.MemTotal}}" }
+$lines += Run-Step 'WSL memory limit (.wslconfig)' { $c = Join-Path $env:USERPROFILE '.wslconfig'; if (Test-Path $c) { Get-Content $c } else { 'no .wslconfig: WSL default = 50% of host memory' } }
+# Tools installed by winget may not be on PATH until a new shell is opened.
+$lines += Run-Step 'winget packages' { winget list --id Kubernetes.kind -e; winget list --id Kubernetes.kubectl -e; winget list --id Helm.Helm -e }
 $lines += Run-Step 'test pull from Docker Hub' { podman pull docker.io/library/busybox:1.36 }
 $lines += Run-Step 'kind'             { kind version }
 $lines += Run-Step 'kubectl'          { kubectl version --client }
 $lines += Run-Step 'helm'             { helm version --short }
 $lines += Run-Step 'git'              { git --version }
 
-$lines | Tee-Object -FilePath $report
+$lines | Out-File -FilePath $report -Encoding utf8
+$lines
 "Report saved to: $report"
