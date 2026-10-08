@@ -272,40 +272,28 @@ if (-not $SkipDeploy) {
         Exec 'podman' @('machine', 'ssh', 'sudo sysctl -w fs.inotify.max_user_instances=8192 fs.inotify.max_user_watches=524288') | Out-Null
 
         # kind starts all node containers in parallel. On the WSL Podman machine
-        # (cgroupfs, parent group /sys/fs/cgroup/non-systemd/machine.slice) the
-        # runtimes race to enable cgroup controllers on that shared parent and one
-        # container randomly fails ("controller pids is not available", or
-        # "conmon bytes"). Enabling the controllers once, before kind starts,
-        # removes the race. Podman machine only, until its next restart.
-        $prep = @'
-set -u
-echo "cgroup manager: $(podman info --format '{{.Host.CgroupManager}}' 2>/dev/null)"
-echo "root controllers   : $(cat /sys/fs/cgroup/cgroup.controllers)"
-echo "root subtree_ctrl  : $(cat /sys/fs/cgroup/cgroup.subtree_control)"
-for parent in /sys/fs/cgroup/non-systemd /sys/fs/cgroup/machine.slice; do
-  [ -d "$parent" ] || continue
-  echo "== $parent"
-  echo "controllers        : $(cat $parent/cgroup.controllers)"
-  echo "subtree_control    : $(cat $parent/cgroup.subtree_control)"
-  echo "processes in group : $(wc -l < $parent/cgroup.procs)"
-done
-enable_controllers() {
-  dir="$1"
-  for c in $(cat "$dir/cgroup.controllers"); do
-    grep -qw "$c" "$dir/cgroup.subtree_control" || echo "+$c" > "$dir/cgroup.subtree_control" 2>/dev/null || echo "could not enable $c in $dir"
-  done
-}
-if [ -d /sys/fs/cgroup/non-systemd ]; then
-  enable_controllers /sys/fs/cgroup/non-systemd
-  mkdir -p /sys/fs/cgroup/non-systemd/machine.slice
-  enable_controllers /sys/fs/cgroup/non-systemd/machine.slice
-  echo "after: non-systemd subtree_control    : $(cat /sys/fs/cgroup/non-systemd/cgroup.subtree_control)"
-  echo "after: machine.slice subtree_control  : $(cat /sys/fs/cgroup/non-systemd/machine.slice/cgroup.subtree_control)"
-fi
-'@
-        $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($prep -replace "`r", '')))
-        $p = Exec 'podman' @('machine', 'ssh', "echo $b64 | base64 -d | sudo sh")
-        Log "Podman cgroup preparation:`n$($p.Out)"
+        # the Podman service runs outside systemd's tree (/sys/fs/cgroup/non-systemd,
+        # a group holding processes, so it cannot pass controllers to children).
+        # With cgroup_manager=systemd, some parallel creations fall back to that
+        # group and fail ("controller pids is not available", "conmon bytes").
+        # Fix: let Podman manage cgroups itself (cgroupfs). Containers then go
+        # under /libpod_parent at the cgroup root, which has every controller.
+        # One file in the Podman machine; remove it to revert:
+        #   podman machine ssh sudo rm /etc/containers/containers.conf.d/90-kind-cgroupfs.conf
+        $mgr = (Exec 'podman' @('info', '--format', '{{.Host.CgroupManager}}')).Out.Trim()
+        Log "Podman cgroup manager: $mgr"
+        if ($mgr -ne 'cgroupfs') {
+            $conf = "# Added by grafana-openshift-ha tests/local/run-test.ps1 (kind on WSL).`n[engine]`ncgroup_manager = `"cgroupfs`"`n"
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($conf))
+            $w = Exec 'podman' @('machine', 'ssh', "sudo mkdir -p /etc/containers/containers.conf.d && echo $b64 | base64 -d | sudo tee /etc/containers/containers.conf.d/90-kind-cgroupfs.conf")
+            Log "Switching Podman to cgroupfs and restarting the Podman machine (about 30 s)"
+            Exec 'podman' @('machine', 'stop') | Out-Null
+            Exec 'podman' @('machine', 'start') | Out-Null
+            $mgr = (Exec 'podman' @('info', '--format', '{{.Host.CgroupManager}}')).Out.Trim()
+            Log "Podman cgroup manager now: $mgr"
+            if ($mgr -ne 'cgroupfs') { Log 'ERROR: could not switch Podman to cgroupfs. See the log.'; exit 1 }
+            Exec 'podman' @('machine', 'ssh', 'sudo sysctl -w fs.inotify.max_user_instances=8192 fs.inotify.max_user_watches=524288') | Out-Null
+        }
 
         Log "Creating kind cluster $Cluster (1 control plane, 2+2 workers in data zones, 1 in the quorum zone). First run downloads the node image."
         $created = $false
