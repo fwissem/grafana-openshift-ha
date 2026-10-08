@@ -28,8 +28,9 @@ or secret.
 <context>
 Platform
 - OpenShift 4.18 fleet (about 40 clusters), bare-metal and VMs, air-gapped,
-  OVN-Kubernetes, CRI-O. Nodes are spread over several zones identified by a node
-  label.
+  OVN-Kubernetes, CRI-O. Nodes are spread over three zones identified by a node
+  label: two data zones, and a third zone that only provides quorum. Grafana,
+  PostgreSQL and the backup jobs must run in the two data zones only.
 - Workflow: I clone the repo from GitHub to a work laptop, then deploy from a
   bastion with `oc` and `helm`.
 - Storage: Portworx 3.x. Shared (RWX) volumes must not be used for databases and
@@ -70,8 +71,8 @@ Constraints for this project
 </context>
 
 <goal>
-1. High availability: >= 2 Grafana replicas (3 preferred) spread across zones
-   with topologySpreadConstraints, PodDisruptionBudget, zero-downtime rolling
+1. High availability: 4 Grafana replicas, 2 per data zone, never in the quorum
+   zone (required node affinity), spread with topologySpreadConstraints, PodDisruptionBudget, zero-downtime rolling
    updates, probes, resource requests and limits. Unified alerting in HA mode
    (headless service, ha_peers). Fixed `secret_key` shared by all replicas.
 2. Persistence: all Grafana state in PostgreSQL. No SQLite. Restarting or

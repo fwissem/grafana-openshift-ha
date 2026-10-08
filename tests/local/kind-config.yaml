@@ -1,7 +1,9 @@
 # kind cluster for the local functional test.
 #
-# 1 control plane + 3 workers, one per zone, so the zone spread of the Grafana
-# replicas and the loss of one node can be tested.
+# Same layout as production: two data zones with two workers each, plus one
+# worker in a quorum zone where nothing of Grafana may run.
+#   zone-a, zone-b : data zones (Grafana, PostgreSQL, backups)
+#   zone-c         : quorum zone (must stay empty of Grafana workloads)
 # Grafana is published on http://localhost:3300 (NodePort 30300).
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -16,6 +18,12 @@ nodes:
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-a
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-a
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-b
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-b

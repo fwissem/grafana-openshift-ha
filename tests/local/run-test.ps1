@@ -3,12 +3,13 @@
   Local functional test of the HA Grafana + PostgreSQL deployment on kind (Podman).
 
 .DESCRIPTION
-  Creates (or reuses) a kind cluster "grafana-ha" with 3 worker nodes in 3 zones,
-  deploys PostgreSQL (manifests/overlays/kind) and Grafana (Helm chart from
-  charts\grafana), then checks:
+  Creates (or reuses) a kind cluster "grafana-ha" laid out like production:
+  two data zones (zone-a, zone-b) with two workers each and one quorum zone
+  (zone-c) with one worker. Deploys PostgreSQL (manifests/overlays/kind) and
+  Grafana (Helm chart from charts\grafana), then checks:
 
-    T01  3 Grafana replicas ready
-    T02  replicas spread over 3 zones
+    T01  4 Grafana replicas ready
+    T02  2 replicas per data zone, nothing in the quorum zone (PostgreSQL included)
     T03  Grafana uses PostgreSQL, no PVC on Grafana
     T04  unified alerting cluster sees all replicas
     T05  test content created (folders, dashboards, user, folder permissions)
@@ -17,8 +18,9 @@
     T08  delete ALL Grafana pods: nothing lost
     T09  add a datasource (helm upgrade): pods rolled, nothing lost
     T10  kill one pod under load: no failed request
-    T11  NetworkPolicy: only labelled clients reach PostgreSQL
-    T12  backup, simulated loss, restore: dashboard is back
+    T11  drain a whole data zone under load: service continues, quorum zone unused
+    T12  NetworkPolicy: only labelled clients reach PostgreSQL
+    T13  backup, simulated loss, restore: dashboard is back
 
   Everything it creates lives in the kind cluster. It changes nothing else.
   Results: tests\local\out\results.txt   Full log: tests\local\out\run-test.log
@@ -54,6 +56,9 @@ $ChartDir     = Join-Path $Root 'charts\grafana'
 $ChartVersion = '13.3.1'
 $PortUrl      = 'http://localhost:3300'
 $Selector     = 'app.kubernetes.io/name=grafana,app.kubernetes.io/instance=grafana'
+$Replicas     = 4
+$DataZones    = @('zone-a', 'zone-b')
+$QuorumZone   = 'zone-c'
 $env:KIND_EXPERIMENTAL_PROVIDER = 'podman'
 
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
@@ -260,7 +265,7 @@ if (-not $SkipDeploy) {
         $exists = $false
     }
     if (-not $exists) {
-        Log "Creating kind cluster $Cluster (1 control plane + 3 workers in 3 zones). First run downloads the node image."
+        Log "Creating kind cluster $Cluster (1 control plane, 2+2 workers in data zones, 1 in the quorum zone). First run downloads the node image."
         $r = Exec 'kind' @('create', 'cluster', '--config', (Join-Path $PSScriptRoot 'kind-config.yaml'), '--wait', '5m')
         if ($r.Code -ne 0) { Log "ERROR: kind create cluster failed. See $LogFile"; exit 1 }
     } else {
@@ -297,7 +302,7 @@ $adminPw = Get-SecretValue 'grafana-admin' 'admin-password'
 if (-not $adminPw) { Log 'ERROR: secret grafana-admin not found. Run without -SkipDeploy.'; exit 1 }
 $script:AuthB64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:$adminPw"))
 
-if (-not (Wait-GrafanaReady 3 600)) {
+if (-not (Wait-GrafanaReady $Replicas 600)) {
     Log 'Grafana pods not ready, trying anyway to reach the API.'
 }
 
@@ -319,17 +324,30 @@ Log "Grafana reachable at $script:BaseUrl"
 
 # T01 replicas
 $ready = Get-ReadyGrafanaPods
-if ($ready.Count -eq 3) { Result 'T01' 'replicas ready' 'PASS' '3/3 Grafana pods ready' }
-else { Result 'T01' 'replicas ready' 'FAIL' "$($ready.Count)/3 Grafana pods ready" }
+if ($ready.Count -eq $Replicas) { Result 'T01' 'replicas ready' 'PASS' "$Replicas/$Replicas Grafana pods ready" }
+else { Result 'T01' 'replicas ready' 'FAIL' "$($ready.Count)/$Replicas Grafana pods ready" }
 
 # T02 zone spread
 $nodes = (& kubectl --context $Ctx get nodes -o json 2>$null) -join "`n" | ConvertFrom-Json
 $zoneOf = @{}
 foreach ($n in $nodes.items) { $zoneOf[$n.metadata.name] = $n.metadata.labels.'topology.kubernetes.io/zone' }
-$zones = @($ready | ForEach-Object { $zoneOf[$_.spec.nodeName] } | Sort-Object -Unique)
-$placement = ($ready | ForEach-Object { "$($_.metadata.name)@$($zoneOf[$_.spec.nodeName])" }) -join ', '
-if ($zones.Count -ge 3) { Result 'T02' 'zone spread' 'PASS' "3 zones: $placement" }
-else { Result 'T02' 'zone spread' 'WARN' "$($zones.Count) zone(s): $placement" }
+function Get-ZonePlacement {
+    $pods = @(Get-ReadyGrafanaPods)
+    $byZone = @{}
+    foreach ($z in ($DataZones + $QuorumZone)) { $byZone[$z] = 0 }
+    foreach ($p in $pods) { $z = $zoneOf[$p.spec.nodeName]; if ($byZone.ContainsKey($z)) { $byZone[$z]++ } else { $byZone[$z] = 1 } }
+    return $byZone
+}
+$byZone = Get-ZonePlacement
+$nodesUsed = @($ready | ForEach-Object { $_.spec.nodeName } | Sort-Object -Unique).Count
+$pg = KJson @('get', 'pod', 'grafana-postgresql-0')
+$pgZone = 'n/a'; if ($pg) { $pgZone = $zoneOf[$pg.spec.nodeName] }
+$placement = ($byZone.Keys | Sort-Object | ForEach-Object { "$_=$($byZone[$_])" }) -join ' '
+$detail = "Grafana per zone: $placement; distinct nodes: $nodesUsed; PostgreSQL in $pgZone"
+$even = ($byZone[$DataZones[0]] -eq 2 -and $byZone[$DataZones[1]] -eq 2)
+if ($byZone[$QuorumZone] -gt 0 -or $pgZone -eq $QuorumZone) { Result 'T02' 'zone placement' 'FAIL' "$detail (quorum zone used)" }
+elseif ($even -and $nodesUsed -eq $Replicas) { Result 'T02' 'zone placement' 'PASS' $detail }
+else { Result 'T02' 'zone placement' 'WARN' "$detail (not 2+2 on distinct nodes)" }
 
 # T03 database backend, no Grafana PVC
 $settings = Api 'GET' '/api/admin/settings'
@@ -342,8 +360,8 @@ else { Result 'T03' 'state in PostgreSQL' 'FAIL' "database.type=$dbType, Grafana
 # T04 alerting HA cluster
 $peersOk = Wait-Until {
     $s = Api 'GET' '/api/alertmanager/grafana/api/v2/status'
-    $s.Json -and $s.Json.cluster -and @($s.Json.cluster.peers).Count -ge 3
-} 120 'alertmanager cluster with 3 peers'
+    $s.Json -and $s.Json.cluster -and @($s.Json.cluster.peers).Count -ge $Replicas
+} 120 "alertmanager cluster with $Replicas peers"
 $st = Api 'GET' '/api/alertmanager/grafana/api/v2/status'
 $peerCount = 0; $clusterStatus = 'n/a'
 if ($st.Json -and $st.Json.cluster) { $peerCount = @($st.Json.cluster.peers).Count; $clusterStatus = $st.Json.cluster.status }
@@ -411,8 +429,8 @@ K @('delete', 'pod', '-l', $Selector, '--wait=false') | Out-Null
 Start-Sleep -Seconds 5
 $back = Wait-Until {
     $r = Get-ReadyGrafanaPods
-    $r.Count -eq 3 -and @($r | Where-Object { $before -contains $_.metadata.name }).Count -eq 0
-} 600 '3 new Grafana pods ready'
+    $r.Count -eq $Replicas -and @($r | Where-Object { $before -contains $_.metadata.name }).Count -eq 0
+} 600 "$Replicas new Grafana pods ready"
 Wait-Until { (Api 'GET' '/api/health' -Anonymous).Status -eq 200 } 120 'API back' | Out-Null
 if ($back) { Test-Content 'T08' 'all pods deleted: content kept' | Out-Null }
 else { Result 'T08' 'all pods deleted: content kept' 'FAIL' 'new pods did not become ready' }
@@ -421,7 +439,7 @@ else { Result 'T08' 'all pods deleted: content kept' 'FAIL' 'new pods did not be
 $before = @(Get-GrafanaPods | ForEach-Object { $_.metadata.name })
 Log 'helm upgrade with a third datasource'
 $r = Helm-Deploy 'values-test-datasources-added.yaml'
-Wait-GrafanaReady 3 600 | Out-Null
+Wait-GrafanaReady $Replicas 600 | Out-Null
 $after = @(Get-ReadyGrafanaPods | ForEach-Object { $_.metadata.name })
 $rolled = @($after | Where-Object { $before -contains $_ }).Count -eq 0
 $dsC = (Api 'GET' '/api/datasources/uid/test-cluster-c').Status
@@ -456,9 +474,47 @@ if ($load.Errors) { $detail += "; errors: $($load.Errors)" }
 if ($load.Ok -gt 0 -and $load.Fail -eq 0) { Result 'T10' 'pod killed under load' 'PASS' $detail }
 elseif ($load.Ok -gt 0 -and $load.Fail -le 3) { Result 'T10' 'pod killed under load' 'WARN' $detail }
 else { Result 'T10' 'pod killed under load' 'FAIL' $detail }
-Wait-GrafanaReady 3 600 | Out-Null
+Wait-GrafanaReady $Replicas 600 | Out-Null
 
-# T11 NetworkPolicy on PostgreSQL
+# T11 lose a whole data zone (the one without PostgreSQL) while clients poll
+$pgNode = ''; $pgp = KJson @('get', 'pod', 'grafana-postgresql-0'); if ($pgp) { $pgNode = $pgp.spec.nodeName }
+$pgZone = $zoneOf[$pgNode]
+$lostZone = @($DataZones | Where-Object { $_ -ne $pgZone })[0]
+$zoneNodes = @($nodes.items | Where-Object { $_.metadata.labels.'topology.kubernetes.io/zone' -eq $lostZone } | ForEach-Object { $_.metadata.name })
+Log "Simulating the loss of $lostZone (nodes: $($zoneNodes -join ', ')); PostgreSQL stays in $pgZone"
+$job = Start-Job -ArgumentList "$script:BaseUrl/api/dashboards/uid/dash-shared", 150 -ScriptBlock {
+    param($Url, $Seconds)
+    $ok = 0; $fail = 0; $errs = @()
+    $end = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $end) {
+        try {
+            $r = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 5 -DisableKeepAlive
+            if ($r.StatusCode -eq 200) { $ok++ } else { $fail++ }
+        } catch { $fail++; if ($errs.Count -lt 5) { $errs += $_.Exception.Message } }
+        Start-Sleep -Milliseconds 200
+    }
+    [pscustomobject]@{ Ok = $ok; Fail = $fail; Errors = ($errs -join ' | ') }
+}
+Start-Sleep -Seconds 5
+$drainOk = $true
+foreach ($n in $zoneNodes) {
+    $d = Exec 'kubectl' @('--context', $Ctx, 'drain', $n, '--ignore-daemonsets', '--delete-emptydir-data', '--force', '--timeout=300s')
+    if ($d.Code -ne 0) { $drainOk = $false }
+}
+$survived = Wait-Until { (Get-ReadyGrafanaPods).Count -eq $Replicas } 300 "$Replicas replicas back in the remaining zone"
+$load = Receive-Job -Job $job -Wait -AutoRemoveJob
+$byZone = Get-ZonePlacement
+$placement = ($byZone.Keys | Sort-Object | ForEach-Object { "$_=$($byZone[$_])" }) -join ' '
+$detail = "drained $lostZone (drain ok=$drainOk); requests ok=$($load.Ok) failed=$($load.Fail); now: $placement"
+if ($load.Errors) { $detail += "; errors: $($load.Errors)" }
+if ($byZone[$QuorumZone] -gt 0) { Result 'T11' 'data zone lost' 'FAIL' "$detail (pods moved to the quorum zone)" }
+elseif ($survived -and $load.Ok -gt 0 -and $load.Fail -eq 0) { Result 'T11' 'data zone lost' 'PASS' $detail }
+elseif ($survived -and $load.Ok -gt 0 -and $load.Fail -le 3) { Result 'T11' 'data zone lost' 'WARN' $detail }
+else { Result 'T11' 'data zone lost' 'FAIL' $detail }
+Log "Restoring $lostZone (uncordon)"
+foreach ($n in $zoneNodes) { Exec 'kubectl' @('--context', $Ctx, 'uncordon', $n) | Out-Null }
+
+# T12 NetworkPolicy on PostgreSQL
 function Probe-Postgres([string]$PodName, [string]$Labels) {
     K @('delete', 'pod', $PodName, '--ignore-not-found', '--wait=true') | Out-Null
     $a = @('run', $PodName, '--restart=Never', '--image=docker.io/library/postgres:18')
@@ -476,18 +532,18 @@ function Probe-Postgres([string]$PodName, [string]$Labels) {
 $denied  = Probe-Postgres 'np-probe-unlabelled' ''
 $allowed = Probe-Postgres 'np-probe-labelled' 'grafana-db-client=true'
 $detail = "unlabelled: '$($denied.Trim())'; labelled: '$($allowed.Trim())'"
-if ($allowed -match 'accepting connections' -and $denied -notmatch 'accepting connections') { Result 'T11' 'NetworkPolicy on PostgreSQL' 'PASS' $detail }
-elseif ($allowed -match 'accepting connections') { Result 'T11' 'NetworkPolicy on PostgreSQL' 'WARN' "$detail (policy not enforced by this cluster network plugin)" }
-else { Result 'T11' 'NetworkPolicy on PostgreSQL' 'FAIL' $detail }
+if ($allowed -match 'accepting connections' -and $denied -notmatch 'accepting connections') { Result 'T12' 'NetworkPolicy on PostgreSQL' 'PASS' $detail }
+elseif ($allowed -match 'accepting connections') { Result 'T12' 'NetworkPolicy on PostgreSQL' 'WARN' "$detail (policy not enforced by this cluster network plugin)" }
+else { Result 'T12' 'NetworkPolicy on PostgreSQL' 'FAIL' $detail }
 
-# T12 backup, simulated loss, restore
+# T13 backup, simulated loss, restore
 $jobName = 'backup-test-' + (Get-Date -Format 'yyyyMMddHHmmss')
 Log "Running backup job $jobName"
 K @('create', 'job', "--from=cronjob/grafana-db-backup", $jobName) | Out-Null
 $bk = K @('wait', '--for=condition=complete', "job/$jobName", '--timeout=600s')
 $bkLog = (K @('logs', "job/$jobName")).Out
 if ($bk.Code -ne 0 -or $bkLog -notmatch 'backup written') {
-    Result 'T12' 'backup and restore' 'FAIL' "backup job failed: $($bkLog.Trim())"
+    Result 'T13' 'backup and restore' 'FAIL' "backup job failed: $($bkLog.Trim())"
 } else {
     $del = (Api 'DELETE' '/api/dashboards/uid/dash-shared').Status
     $gone = (Api 'GET' '/api/dashboards/uid/dash-shared').Status
@@ -499,14 +555,14 @@ if ($bk.Code -ne 0 -or $bkLog -notmatch 'backup written') {
     Exec 'kubectl' @('--context', $Ctx, 'apply', '-k', (Join-Path $PSScriptRoot 'restore-kind')) | Out-Null
     $rs = K @('wait', '--for=condition=complete', 'job/grafana-db-restore', '--timeout=600s')
     $rsLog = (K @('logs', 'job/grafana-db-restore')).Out
-    Log 'Scaling Grafana back to 3'
-    K @('scale', 'deployment/grafana', '--replicas=3') | Out-Null
-    Wait-GrafanaReady 3 600 | Out-Null
+    Log "Scaling Grafana back to $Replicas"
+    K @('scale', 'deployment/grafana', "--replicas=$Replicas") | Out-Null
+    Wait-GrafanaReady $Replicas 600 | Out-Null
     $restored = (Api 'GET' '/api/dashboards/uid/dash-shared').Status
     if ($rs.Code -eq 0 -and $gone -ne 200 -and $restored -eq 200) {
-        Result 'T12' 'backup and restore' 'PASS' 'dashboard deleted, database restored from the dump, dashboard back'
+        Result 'T13' 'backup and restore' 'PASS' 'dashboard deleted, database restored from the dump, dashboard back'
     } else {
-        Result 'T12' 'backup and restore' 'FAIL' "restore rc=$($rs.Code), GET after delete=$gone, after restore=$restored; restore log: $($rsLog.Trim())"
+        Result 'T13' 'backup and restore' 'FAIL' "restore rc=$($rs.Code), GET after delete=$gone, after restore=$restored; restore log: $($rsLog.Trim())"
     }
     K @('delete', 'job', 'grafana-db-restore', '--ignore-not-found') | Out-Null
 }

@@ -4,6 +4,8 @@
 # PostgreSQL replication: if the node is lost, the pod restarts on another node
 # with the same data. Grafana is unavailable for that time (typically 1-2 min).
 #
+# Runs in the two data zones only (never in the quorum zone).
+#
 # Runs with an arbitrary UID (OpenShift restricted-v2): the official image
 # handles a UID without a passwd entry (nss_wrapper) and only needs the data
 # directory to be writable, which fsGroup on the volume provides.
@@ -35,6 +37,17 @@ spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
       terminationGracePeriodSeconds: 60
+      # Data zones only, never the quorum zone. Zone names are set by the overlay.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values:
+                      - zone-a
+                      - zone-b
       securityContext:
         runAsNonRoot: true
         seccompProfile:

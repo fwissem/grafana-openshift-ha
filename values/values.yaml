@@ -31,7 +31,24 @@ image:
   pullPolicy: IfNotPresent
 
 # -- High availability -----------------------------------------------------------
-replicas: 3
+# Two data zones + one quorum zone: Grafana runs in the two data zones only.
+# 4 replicas = 2 per data zone, so losing a whole zone still leaves 2 replicas
+# (and losing one more node still leaves 1).
+replicas: 4
+
+# Data zones only: never schedule on the quorum zone. The zone label key and
+# the zone names are placeholders: set the real ones in values-local.yaml
+# (Helm replaces lists, so copy this whole block there).
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values:
+                - zone-a
+                - zone-b
 
 # Headless service used by unified alerting to gossip between replicas (port 9094).
 headlessService: true
@@ -45,9 +62,11 @@ deploymentStrategy:
 podDisruptionBudget:
   maxUnavailable: 1
 
-# One replica per node (hard) and spread over zones (soft, so a lost zone never
-# blocks rescheduling). Tainted nodes (control plane, cordoned nodes) are not
-# counted, otherwise they would block the hostname spread.
+# Even split over the data zones (soft, so a lost zone never blocks
+# rescheduling into the other one) and one replica per node (hard).
+# Only nodes allowed by the affinity above are counted (the quorum zone is
+# ignored), and tainted nodes (control plane, cordoned nodes) are not counted
+# either, otherwise they would block the hostname spread.
 topologySpreadConstraints:
   - maxSkew: 1
     topologyKey: topology.kubernetes.io/zone
@@ -175,7 +194,7 @@ grafana.ini:
     host: grafana-postgresql:5432
     # name / user / password come from the GF_DATABASE_* environment variables.
     ssl_mode: disable            # in-cluster traffic; use "require" for an external database
-    max_open_conn: 25            # x3 replicas = 75, below max_connections=150
+    max_open_conn: 25            # x4 replicas = 100, below max_connections=150
     max_idle_conn: 10
     conn_max_lifetime: 14400
     migration_locking: true      # only one replica runs schema migrations

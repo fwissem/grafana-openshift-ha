@@ -21,13 +21,17 @@ PostgreSQL, so any Grafana pod can be deleted at any time without losing anythin
 
 | Need | Choice |
 |---|---|
-| High availability | 2-3 Grafana replicas spread across zones, PodDisruptionBudget, rolling updates |
+| High availability | 4 Grafana replicas, 2 per data zone, never in the quorum zone; PodDisruptionBudget, rolling updates |
 | Persistence | PostgreSQL (StatefulSet on a replicated block volume) + scheduled dumps |
 | Authentication | Grafana generic OAuth against the OpenShift OAuth server, groups mapped to roles |
 | Sharing without login | `auth.anonymous` as Viewer, limited to designated folders |
 | Datasources | Generated from a list in a private values file, with stable uids |
 | Installation | `helm upgrade --install` from a locally untarred chart + `oc apply -k` |
 | Secrets | Created on the cluster from a local, untracked file. Never in Git |
+
+Zones: the cluster has two data zones and a third zone that only provides
+quorum. Grafana, PostgreSQL and the backup jobs are pinned to the two data zones
+by node affinity; the zone names are set in `values-local.yaml` and the overlay.
 
 Known limit, by design: PostgreSQL is a single instance on a replicated volume.
 Losing its node means a short Grafana interruption while the pod is rescheduled,
@@ -52,7 +56,7 @@ with no data loss. An external managed PostgreSQL can be selected by values inst
 │   ├── overlays/kind/            # local test cluster (arbitrary UID like OpenShift)
 │   └── restore/                  # restore Job, applied on purpose only
 ├── tests/local/
-│   ├── kind-config.yaml          # 1 control plane + 3 workers in 3 zones
+│   ├── kind-config.yaml          # 2 data zones x 2 workers + 1 quorum-zone worker
 │   ├── run-test.ps1              # automated functional test (Windows + Podman)
 │   └── ...
 ├── dashboards/                   # provisioned dashboards (JSON)              [next]
@@ -138,15 +142,16 @@ powershell -ExecutionPolicy Bypass -File D:\grafana-openshift-ha\tests\local\run
 
 | Test | What it proves |
 |---|---|
-| T01-T02 | 3 replicas ready, spread over 3 zones |
+| T01-T02 | 4 replicas ready, 2 per data zone, nothing in the quorum zone |
 | T03 | state in PostgreSQL, no Grafana volume |
 | T04 | alerting cluster formed between replicas |
 | T05-T07 | folders, dashboards, user, permissions; anonymous sees the shared folder only; same content on every replica |
 | T08 | every Grafana pod deleted at once: nothing lost |
 | T09 | a datasource added with `helm upgrade`: pods rolled, nothing lost (the original defect) |
 | T10 | one pod killed while clients poll: no failed request |
-| T11 | only labelled clients reach PostgreSQL |
-| T12 | backup, dashboard deleted, database restored, dashboard back |
+| T11 | a whole data zone drained while clients poll: service continues, quorum zone stays unused |
+| T12 | only labelled clients reach PostgreSQL |
+| T13 | backup, dashboard deleted, database restored, dashboard back |
 
 Results go to `tests\local\out\results.txt` (git-ignored). Options:
 `-Recreate` (fresh cluster), `-SkipDeploy` (tests only), `-Destroy` (delete the cluster).

@@ -11,6 +11,19 @@
 # global:
 #   imageRegistry: registry.example.com/dockerhub
 
+# Data zones (Grafana never runs in the quorum zone). Use the zone label key
+# and zone names of your nodes:  oc get nodes -L topology.kubernetes.io/zone
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values:
+                - datacenter-1
+                - datacenter-2
+
 grafana.ini:
   server:
     root_url: https://grafana.apps.cluster.example.com/

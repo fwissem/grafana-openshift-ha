@@ -8,7 +8,7 @@
 #   kubectl -n <ns> wait --for=condition=complete job/grafana-db-restore --timeout=600s
 #   kubectl -n <ns> logs job/grafana-db-restore
 #   kubectl -n <ns> delete job grafana-db-restore
-#   kubectl -n <ns> scale deployment/grafana --replicas=3
+#   kubectl -n <ns> scale deployment/grafana --replicas=4
 #
 # BACKUP_FILE: a file name under /backup, or "latest" for the newest dump.
 # On OpenShift, apply it in the Grafana namespace: the SCC assigns the UID.
@@ -33,6 +33,16 @@ spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       enableServiceLinks: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values:
+                      - zone-a
+                      - zone-b
       securityContext:
         runAsNonRoot: true
         seccompProfile:
