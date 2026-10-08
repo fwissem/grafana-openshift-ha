@@ -265,9 +265,23 @@ if (-not $SkipDeploy) {
         $exists = $false
     }
     if (-not $exists) {
+        # kind runs Kubernetes inside node containers; the kubelets need more
+        # inotify instances than the Podman VM default. Applies to the Podman
+        # machine only, until its next restart.
+        Exec 'podman' @('machine', 'ssh', 'sudo sysctl -w fs.inotify.max_user_instances=8192 fs.inotify.max_user_watches=524288') | Out-Null
+
         Log "Creating kind cluster $Cluster (1 control plane, 2+2 workers in data zones, 1 in the quorum zone). First run downloads the node image."
-        $r = Exec 'kind' @('create', 'cluster', '--config', (Join-Path $PSScriptRoot 'kind-config.yaml'), '--wait', '5m')
-        if ($r.Code -ne 0) { Log "ERROR: kind create cluster failed. See $LogFile"; exit 1 }
+        $created = $false
+        for ($attempt = 1; $attempt -le 3 -and -not $created; $attempt++) {
+            $r = Exec 'kind' @('create', 'cluster', '--config', (Join-Path $PSScriptRoot 'kind-config.yaml'), '--wait', '5m')
+            if ($r.Code -eq 0) { $created = $true; break }
+            Log "kind create cluster failed (attempt $attempt/3); collecting Podman diagnostics and retrying."
+            Exec 'podman' @('ps', '-a') | Out-Null
+            Exec 'podman' @('machine', 'ssh', 'ulimit -a; sysctl fs.inotify fs.file-max kernel.pid_max; free -m; sudo dmesg | tail -n 40; sudo journalctl -n 60 --no-pager') | Out-Null
+            Exec 'kind' @('delete', 'cluster', '--name', $Cluster) | Out-Null
+            Start-Sleep -Seconds 10
+        }
+        if (-not $created) { Log "ERROR: kind create cluster failed 3 times. See $LogFile"; exit 1 }
     } else {
         Log "Reusing kind cluster $Cluster"
     }
