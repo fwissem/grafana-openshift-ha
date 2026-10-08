@@ -90,30 +90,44 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: build the image as scripts/build-image.sh does
+      - name: build the image as scripts/build-image.sh does, check every plugin loads
         run: |
           set -euo pipefail
+          # Errors are also written as annotations, readable without repository rights.
+          fail() { echo "::error::$1"; exit 1; }
           . scripts/lib/common.sh
           mkdir -p /tmp/ctx/plugins
           cp image/Dockerfile /tmp/ctx/
-          verify_plugin_archives | while read -r pid pver; do
+          while read -r pid pver; do
             unzip -q "image/plugins/$pid-$pver.zip" -d /tmp/ctx/plugins
-          done
-          docker build -t grafana-ha:test /tmp/ctx
-      - name: every plugin of plugins.lock loads, signed, at its version
-        run: |
-          set -euo pipefail
+          done < <(verify_plugin_archives)
+          docker build -t localhost/grafana-ha:ci /tmp/ctx > /tmp/build.log 2>&1 \
+            || fail "docker build: $(tail -n 5 /tmp/build.log | tr '\n' ' ')"
+          docker image inspect localhost/grafana-ha:ci > /dev/null || fail "image not in the local store after build"
+          # Throwaway Grafana for this check only: anonymous users are Admin so the
+          # plugin API needs no credentials.
           docker run -d --name g -p 3000:3000 \
-            -e GF_PATHS_PLUGINS=/opt/grafana/plugins -e GF_PLUGINS_PREINSTALL_DISABLED=true \
+            -e GF_PATHS_PLUGINS=/opt/grafana/plugins \
+            -e GF_PLUGINS_PREINSTALL_DISABLED=true \
             -e GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED=true \
-            grafana-ha:test
-          for _ in $(seq 1 60); do curl -fs http://localhost:3000/api/health >/dev/null && break; sleep 2; done
+            -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin \
+            localhost/grafana-ha:ci > /tmp/run.log 2>&1 || fail "docker run: $(tr '\n' ' ' < /tmp/run.log)"
+          up=no
+          for _ in $(seq 1 60); do
+            if curl -fs http://localhost:3000/api/health > /dev/null; then up=yes; break; fi
+            sleep 2
+          done
+          [ "$up" = yes ] || fail "Grafana not healthy: $(docker logs g 2>&1 | tail -n 5 | tr '\n' ' ')"
           rc=0
           while read -r pid pver _; do
             case "$pid" in ''|'#'*) continue ;; esac
-            got="$(curl -fs -u admin:admin "http://localhost:3000/api/plugins/$pid/settings" | jq -r '"\(.info.version) \(.signature)"')"
+            got="$(curl -s "http://localhost:3000/api/plugins/$pid/settings" | jq -r '"\(.info.version) \(.signature)"' 2>/dev/null || true)"
             echo "$pid: $got (expected $pver valid)"
-            [ "$got" = "$pver valid" ] || rc=1
+            if [ "$got" != "$pver valid" ]; then
+              echo "::error::$pid: got '$got', expected '$pver valid'"; rc=1
+            fi
           done < values/plugins.lock
-          if docker logs g 2>&1 | grep -E 'Installing plugin'; then echo "Grafana tried to download plugins"; rc=1; fi
+          docker logs g > /tmp/grafana.log 2>&1
+          if grep -E 'Installing plugin' /tmp/grafana.log; then echo "::error::Grafana tried to download plugins"; rc=1; fi
+          grep -iE 'plugin.*(error|invalid|unsigned|modified)' /tmp/grafana.log | head -n 5 | while read -r l; do echo "::warning::$l"; done
           exit $rc
