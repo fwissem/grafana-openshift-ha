@@ -1,20 +1,43 @@
-# --- Private, environment-specific files: never commit ---
-values-local.yaml
-**/values-local.yaml
-secrets.local.env
-.anonymity-denylist
+# =====================================================================
+# Private, environment-specific files: NEVER commit (public repository)
+# =====================================================================
 /local/
 /exports/
+values-local.yaml
+**/values-local.yaml
+deploy.env
+*.env
+!deploy.env.example
+secrets.local.env
+datasource-tokens.env
+.anonymity-denylist
 
-# --- Helm chart: downloaded and untarred by hand, not stored here ---
+# Credentials of any kind
+kubeconfig
+*.kubeconfig
+*kubeconfig*.yaml
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa*
+id_ed25519*
+.netrc
+*.token
+
+# Helm chart: downloaded and untarred by hand, not stored here
 /charts/
+*.tgz
 
-# --- Test output ---
+# Test output
 tests/local/out/
 
-# --- Editors / OS ---
+# Editors / OS
 .vscode/*
 !.vscode/extensions.json
+.idea/
 *.swp
+*~
 .DS_Store
 Thumbs.db

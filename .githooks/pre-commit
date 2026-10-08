@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# pre-commit - refuse commits that would publish private data.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+#
+# 1. private strings from .anonymity-denylist (scripts/check-anonymity.sh)
+# 2. secret-looking content in the staged files
+# 3. Windows line endings in shell scripts
+
+set -u
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT" || exit 1
+fail=0
+
+if [ -f .anonymity-denylist ]; then
+  scripts/check-anonymity.sh >/dev/null || { scripts/check-anonymity.sh; fail=1; }
+else
+  echo "pre-commit: .anonymity-denylist missing - create it (see .anonymity-denylist.example)."
+  fail=1
+fi
+
+# Secret patterns in staged, added or modified files (content as staged).
+patterns='-----BEGIN [A-Z ]*PRIVATE KEY-----|sha256~[A-Za-z0-9_-]{20,}|eyJhbGciOi[A-Za-z0-9_-]{20,}|glsa_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}'
+while IFS= read -r -d '' f; do
+  if git show ":$f" 2>/dev/null | grep -nIE "$patterns" >/dev/null; then
+    echo "pre-commit: secret-looking content in $f:"
+    git show ":$f" | grep -nIE "$patterns" | cut -c1-120 | sed 's/^/    /'
+    fail=1
+  fi
+  case "$f" in
+    *.sh) if git show ":$f" | grep -q $'\r'; then echo "pre-commit: CRLF line endings in $f"; fail=1; fi ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACM -z)
+
+if [ "$fail" -ne 0 ]; then
+  echo "pre-commit: commit refused. Fix the above (or, if certain it is a false positive, commit with --no-verify)."
+  exit 1
+fi
+exit 0

@@ -1,0 +1,60 @@
+# Alerts for the Grafana service itself. Evaluated by the user workload Thanos
+# Ruler, which can also read platform metrics (kube-state-metrics).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: grafana
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: grafana
+spec:
+  groups:
+    - name: grafana-ha
+      rules:
+        - alert: GrafanaReplicasDegraded
+          expr: |
+            kube_deployment_status_replicas_available{deployment="grafana", namespace="__NAMESPACE__"}
+              < kube_deployment_spec_replicas{deployment="grafana", namespace="__NAMESPACE__"}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Grafana runs with fewer replicas than requested.
+            description: '{{ $value }} Grafana replicas available in {{ $labels.namespace }} for 15 minutes.'
+        - alert: GrafanaDown
+          expr: |
+            kube_deployment_status_replicas_available{deployment="grafana", namespace="__NAMESPACE__"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: No Grafana replica is available.
+            description: Grafana in {{ $labels.namespace }} has no available replica for 5 minutes.
+        - alert: GrafanaDatabaseDown
+          expr: |
+            kube_statefulset_status_replicas_ready{statefulset="grafana-postgresql", namespace="__NAMESPACE__"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: The Grafana PostgreSQL database is not ready.
+            description: PostgreSQL for Grafana in {{ $labels.namespace }} has been unavailable for 5 minutes; Grafana cannot serve requests.
+        - alert: GrafanaHighErrorRate
+          expr: |
+            sum by (namespace) (rate(grafana_http_request_duration_seconds_count{namespace="__NAMESPACE__", status_code=~"5.."}[5m]))
+              / sum by (namespace) (rate(grafana_http_request_duration_seconds_count{namespace="__NAMESPACE__"}[5m])) > 0.05
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than 5% of Grafana requests fail.
+            description: '{{ $value | humanizePercentage }} of Grafana requests returned 5xx in {{ $labels.namespace }} over 15 minutes.'
+        - alert: GrafanaBackupMissing
+          expr: |
+            time() - max(kube_cronjob_status_last_successful_time{cronjob="grafana-db-backup", namespace="__NAMESPACE__"}) > 2 * 86400
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: No successful Grafana database backup for more than 2 days.
+            description: The grafana-db-backup CronJob in __NAMESPACE__ has not succeeded for more than 48 hours.

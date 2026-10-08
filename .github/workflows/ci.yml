@@ -1,0 +1,75 @@
+# Static checks on every push and pull request. Nothing is deployed.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CHART_VERSION: "13.3.1"
+
+jobs:
+  lint:
+    name: Shell and YAML lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh tests/openshift/*.sh tests/local/*.sh .githooks/pre-commit
+      - name: no CRLF in shell scripts
+        run: |
+          if grep -rlI $'\r' --include='*.sh' .; then echo "CRLF found"; exit 1; fi
+      - name: yamllint
+        run: |
+          pip install --quiet yamllint
+          yamllint -d '{extends: relaxed, rules: {line-length: disable, indentation: disable}}' manifests values tests .github
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  render:
+    name: Render manifests and chart
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: kustomize build (kind and OpenShift overlays)
+        run: |
+          kubectl kustomize manifests/overlays/kind > /tmp/kind.yaml
+          kubectl kustomize manifests/overlays/openshift > /tmp/openshift.yaml
+          kubectl kustomize manifests/restore > /tmp/restore.yaml
+          grep -c '^kind:' /tmp/kind.yaml /tmp/openshift.yaml /tmp/restore.yaml
+      - name: helm template with the public values
+        run: |
+          helm repo add grafana-community https://grafana-community.github.io/helm-charts
+          helm pull grafana-community/grafana --version "$CHART_VERSION" --untar --untardir charts
+          cp values/values-local.yaml.example values/values-local.yaml
+          helm template grafana charts/grafana -n grafana \
+            -f values/values.yaml -f values/values-openshift.yaml -f values/values-local.yaml > /tmp/grafana.yaml
+          helm template grafana charts/grafana -n grafana \
+            -f values/values.yaml -f tests/local/values-kind.yaml -f tests/local/values-test-datasources.yaml > /tmp/grafana-kind.yaml
+          grep -c '^kind:' /tmp/grafana.yaml /tmp/grafana-kind.yaml
+      - name: validate against Kubernetes schemas (kubeconform)
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          ./kubeconform -strict -summary -ignore-missing-schemas -skip Route,ServiceMonitor,PrometheusRule \
+            /tmp/kind.yaml /tmp/openshift.yaml /tmp/restore.yaml /tmp/grafana.yaml /tmp/grafana-kind.yaml

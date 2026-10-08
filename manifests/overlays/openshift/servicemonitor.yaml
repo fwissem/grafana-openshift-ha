@@ -1,0 +1,19 @@
+# Grafana metrics scraped by User Workload Monitoring (UWM must be enabled).
+# install.sh skips monitoring objects when UWM_ENABLED=false.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: grafana
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: grafana
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+      app.kubernetes.io/instance: grafana
+  endpoints:
+    - port: service
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

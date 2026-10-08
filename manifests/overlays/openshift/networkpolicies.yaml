@@ -1,0 +1,82 @@
+# Ingress rules of the namespace. Egress is not restricted: Grafana must reach
+# the Thanos endpoints of many clusters and the OAuth server.
+#
+# 1. Deny all ingress by default (PostgreSQL's own policy is in the base).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  labels:
+    app.kubernetes.io/part-of: grafana
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# 2. OpenShift router -> Grafana (web UI and API).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana-allow-router
+  labels:
+    app.kubernetes.io/part-of: grafana
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+      ports:
+        - port: 3000
+          protocol: TCP
+---
+# 3. Monitoring (platform and user workload) -> Grafana metrics.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana-allow-monitoring
+  labels:
+    app.kubernetes.io/part-of: grafana
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: monitoring
+      ports:
+        - port: 3000
+          protocol: TCP
+---
+# 4. Grafana <-> Grafana: unified alerting gossip (TCP and UDP 9094).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana-allow-gossip
+  labels:
+    app.kubernetes.io/part-of: grafana
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+      ports:
+        - port: 9094
+          protocol: TCP
+        - port: 9094
+          protocol: UDP

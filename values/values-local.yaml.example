@@ -7,32 +7,12 @@
 # referenced as $__env{DS_TOKEN_...} and stored in the Secret
 # grafana-datasource-tokens (scripts/create-secrets.sh).
 
-# Internal registry proxying Docker Hub (air-gapped clusters).
-# global:
-#   imageRegistry: registry.example.com/dockerhub
-
-# Data zones (Grafana never runs in the quorum zone). Use the zone label key
-# and zone names of your nodes:  oc get nodes -L topology.kubernetes.io/zone
-affinity:
-  nodeAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: topology.kubernetes.io/zone
-              operator: In
-              values:
-                - datacenter-1
-                - datacenter-2
-
-grafana.ini:
-  server:
-    root_url: https://grafana.apps.cluster.example.com/
-
-  auth.generic_oauth:
-    auth_url: https://oauth-openshift.apps.cluster.example.com/oauth/authorize
-    token_url: https://oauth-openshift.apps.cluster.example.com/oauth/token
-    api_url: https://api.cluster.example.com:6443/apis/user.openshift.io/v1/users/~
-    role_attribute_path: "contains(groups[*], 'grafana-admins') && 'Admin' || contains(groups[*], 'grafana-editors') && 'Editor' || 'Viewer'"
+# Zones, replicas, route and OAuth hosts and group names are NOT here: they come
+# from local/deploy.env (scripts/install.sh generates them). This file holds the
+# datasources and any override of values/values.yaml.
+#
+# Tip: scripts/export-grafana.sh writes datasources-values.yaml with the exact
+# names, uids and settings of the current instance.
 
 # One Thanos / Prometheus datasource per cluster, named like the cluster.
 # Keep the uids of the instance you replace: dashboards reference them.

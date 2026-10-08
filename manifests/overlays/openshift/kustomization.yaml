@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# OpenShift layer: PostgreSQL and its backups (base) plus the Route, the
+# NetworkPolicies and the monitoring objects of Grafana.
+#
+# Environment values (namespace, zones, storage class, image digest, route host)
+# are NOT here: scripts/install.sh renders a private overlay from local/deploy.env
+# on top of this one (local/render/overlay, git-ignored).
+resources:
+  - ../../base
+  - route.yaml
+  - networkpolicies.yaml
+  - servicemonitor.yaml
+  - prometheusrule.yaml
