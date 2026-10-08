@@ -2,7 +2,7 @@
 #
 # Availability comes from the storage (volume replicated across nodes), not from
 # PostgreSQL replication: if the node is lost, the pod restarts on another node
-# with the same data. Grafana is unavailable for that time (typically 1-2 min).
+# with the same data. Grafana is unavailable for that time (about 1 to 2 minutes).
 #
 # Runs in the two data zones only (never in the quorum zone).
 #

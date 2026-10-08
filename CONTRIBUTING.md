@@ -1,20 +1,23 @@
 # Contributing
 
-## Ground rules
+## Rules
 
-- **Never commit environment data.** No hostname, cluster or namespace name,
-  zone name, group name, IP address, datasource URL or uid, and no secret.
-  Use neutral placeholders (`example.com`, `cluster-a`, `zone-a`). Real values
-  belong in git-ignored files (`local/`, `values/values-local.yaml`).
-- **Read-only by default.** A script that changes a cluster has a `--check`
-  mode that only shows what would change, and changes nothing without
-  `--apply` (or an explicit confirmation).
-- **Deployment scripts are bash for RHEL 8/9** and use only `oc`, `helm`,
-  `curl` and coreutils (`jq` for the export/import scripts). PowerShell is used
-  only for the Windows local test in `tests/local/`.
-- **No workload in the quorum zone.** Every Deployment, StatefulSet, Job and
-  CronJob carries the data-zone node affinity. `install.sh` refuses to render a
-  workload without it.
+Never commit environment data. That means no hostname, cluster or namespace
+name, zone name, group name, IP address, datasource URL or uid, and no secret.
+Use neutral placeholders such as `example.com`, `cluster-a` and `zone-a`, and
+keep real values in git-ignored files (`local/`, `values/values-local.yaml`).
+
+Scripts that change a cluster are read-only by default. They have a `--check`
+mode that shows what would change, and they change nothing without `--apply` or
+an explicit confirmation.
+
+Deployment scripts are bash for RHEL 8 and 9. They use only `oc`, `helm`,
+`curl` and coreutils, plus `jq` for the export and import scripts. PowerShell
+appears only in the Windows local test under `tests/local/`.
+
+Nothing runs in the quorum zone. Every Deployment, StatefulSet, Job and CronJob
+carries the data-zone node affinity, and `install.sh` refuses to render a
+workload that lacks it.
 
 ## Setup after cloning
 
@@ -31,11 +34,11 @@ scripts/check-anonymity.sh
 shellcheck -S warning -x scripts/*.sh scripts/lib/*.sh tests/openshift/*.sh
 ```
 
-and, for changes to manifests or values, the local test
-(`tests/local/run-test.ps1`, see README) and the OpenShift acceptance test on a
-non-production cluster (`tests/openshift/acceptance.sh`).
+If you changed manifests or values, also run the local test
+(`tests/local/run-test.ps1`, see the README) and the OpenShift acceptance test
+on a non-production cluster (`tests/openshift/acceptance.sh`).
 
 ## Commits
 
-Small commits with a message saying what changed and why. Update
-`CHANGELOG.md` for any change a user of the repository would notice.
+Keep commits small, and say in the message what changed and why. Add an entry
+to `CHANGELOG.md` for any change that someone using the repository would notice.

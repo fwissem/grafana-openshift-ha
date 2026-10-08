@@ -1,11 +1,11 @@
 # Runbook
 
-All commands run on the RHEL deployment machine, from the repository root, with
-`oc` logged in to the target cluster (or `KUBECONFIG` exported). Scripts that
-change something show the plan first and ask for confirmation.
+Run every command on the RHEL deployment machine, from the repository root,
+with `oc` logged in to the target cluster or `KUBECONFIG` exported. Scripts that
+change something print their plan and ask for confirmation first.
 
-Paths below assume the repository is at `/opt/grafana-openshift-ha`;
-adapt them to where you cloned it.
+The paths below assume the repository is in `/opt/grafana-openshift-ha`. Adapt
+them if you cloned it somewhere else.
 
 ## 0. One-time preparation
 
@@ -13,12 +13,12 @@ adapt them to where you cloned it.
 cd /opt/grafana-openshift-ha
 git config core.hooksPath .githooks                # only if you commit from here
 
-# Helm chart, downloaded by hand (from a machine with Internet if needed)
+# Download the Helm chart by hand (from a machine with Internet access if needed)
 helm repo add grafana-community https://grafana-community.github.io/helm-charts
 helm pull grafana-community/grafana --version 13.3.1 --untar --untardir /opt/grafana-openshift-ha/charts
 ```
 
-Images the cluster must be able to pull (directly or through a mirror):
+The cluster must be able to pull two images, directly or through a mirror:
 `docker.io/grafana/grafana:13.2.3-distroless` and
 `registry.redhat.io/rhel9/postgresql-16`.
 
@@ -29,24 +29,26 @@ scripts/collect-facts.sh source -n <current-ns> --kubeconfig <kubeconfig-of-curr
 scripts/collect-facts.sh target -n <new-ns>     --kubeconfig <kubeconfig-of-target-cluster>
 ```
 
-Review `local/deploy.env.generated`: keep only the two data zones in
-`DATA_ZONES`, set the storage class, the group names, then:
+Open `local/deploy.env.generated`. Keep only the two data zones in
+`DATA_ZONES`, set the storage class and the group names, then move it into
+place:
 
 ```bash
 mv local/deploy.env.generated local/deploy.env
 chmod 600 local/deploy.env
 ```
 
-## 2. Export the current Grafana (before anything restarts it)
+## 2. Export the current Grafana before anything restarts it
 
 ```bash
 GRAFANA_USER=admin scripts/export-grafana.sh --url https://<current-grafana-route>
 ```
 
-Output: `exports/<timestamp>/`. Copy the datasources from
-`exports/<timestamp>/datasources-values.yaml` into `values/values-local.yaml`
-(start from `values/values-local.yaml.example`), and put their tokens in
-`local/datasource-tokens.env` as `DS_TOKEN_<NAME>=<token>` lines (`chmod 600`).
+The export goes to `exports/<timestamp>/`. Start `values/values-local.yaml`
+from `values/values-local.yaml.example` and copy the datasources from
+`exports/<timestamp>/datasources-values.yaml` into it. Put their tokens in
+`local/datasource-tokens.env`, one `DS_TOKEN_<NAME>=<token>` line each, and set
+the file to mode 600.
 
 ## 3. Secrets and OAuth client
 
@@ -55,9 +57,10 @@ scripts/create-secrets.sh --check
 scripts/create-secrets.sh --apply
 ```
 
-Creating the OAuthClient needs cluster-admin. Without it, the script writes
-`local/render/oauthclient.yaml` for an administrator, who runs
-`oc apply -f local/render/oauthclient.yaml`; delete the file afterwards.
+Creating the OAuthClient requires cluster-admin. Without that right, the script
+writes `local/render/oauthclient.yaml`, and a cluster administrator applies it
+with `oc apply -f local/render/oauthclient.yaml`. Delete the file afterwards
+because it contains the client secret.
 
 ## 4. Install
 
@@ -73,48 +76,52 @@ tests/openshift/acceptance.sh                  # non-production
 tests/openshift/acceptance.sh --with-restore   # also tests a restore (disruptive)
 ```
 
-Then log in once with an OpenShift account of each group and check the role
-(Admin, Editor, Viewer).
+Then log in once with an OpenShift account from each group and check that it
+gets the expected role (Admin, Editor or Viewer).
 
 ## 6. Import the content
 
 ```bash
 GRAFANA_USER=admin scripts/import-grafana.sh --dir exports/<timestamp> --url https://<new-route>            # plan
-GRAFANA_USER=admin scripts/import-grafana.sh --dir exports/<timestamp> --url https://<new-route> --apply    # do it
+GRAFANA_USER=admin scripts/import-grafana.sh --dir exports/<timestamp> --url https://<new-route> --apply    # import
 ```
 
-Check a few dashboards with their datasource variables, and that the shared
-folders are visible without login.
+Open a few dashboards and change their datasource variables. Then open the
+shared folders in a private browser window to confirm they load without a login.
 
 ## Day-2 operations
 
 ### Add or change a datasource
 
-1. Edit `values/values-local.yaml` (keep the whole list: it replaces the previous one).
-2. If it needs a token: add `DS_TOKEN_X=...` to `local/datasource-tokens.env`,
-   then `scripts/create-secrets.sh --apply --refresh-tokens`.
-3. `scripts/install.sh --check`, then `scripts/install.sh --apply`.
+1. Edit `values/values-local.yaml`. Keep the whole list, because it replaces the
+   previous one.
+2. If the datasource needs a token, add `DS_TOKEN_X=...` to
+   `local/datasource-tokens.env` and run
+   `scripts/create-secrets.sh --apply --refresh-tokens`.
+3. Run `scripts/install.sh --check`, then `scripts/install.sh --apply`.
 
-The replicas restart one by one; dashboards are not affected.
+The replicas restart one at a time and the dashboards stay as they are.
 
 ### Upgrade Grafana or the chart
 
-1. Download the new chart into `charts/grafana` (remove the old directory first).
-2. Set `CHART_VERSION` in `local/deploy.env` and, if pinned, the image tag in
-   `values/values.yaml`.
+1. Remove `charts/grafana` and download the new chart in its place.
+2. Set `CHART_VERSION` in `local/deploy.env`. If you pinned the image tag in
+   `values/values.yaml`, update it too.
 3. Read the chart and Grafana release notes for breaking changes.
-4. On non-production: `install.sh --check`, `--apply`, `acceptance.sh`.
-5. Back up first (`scripts/db-backup-now.sh`): schema migrations run on the
-   first start of a new version and are not reversible.
+4. Take a backup with `scripts/db-backup-now.sh`. A new Grafana version migrates
+   the database schema on its first start, and that migration cannot be undone.
+5. On a non-production cluster, run `install.sh --check`, `install.sh --apply`
+   and `acceptance.sh`.
 
 ### Backups
 
-- Daily at 01:15 UTC (`grafana-db-backup` CronJob), last 14 dumps kept.
-- On demand: `scripts/db-backup-now.sh`.
-- List the dumps: `scripts/db-restore.sh --list`.
-- **Off-cluster copy** (recommended weekly): `scripts/db-backup-fetch.sh`
-  copies the newest dump to `local/db-dumps/` (`--all` for every dump); move it
-  to your backup storage from there.
+The `grafana-db-backup` CronJob dumps the database every day at 01:15 UTC and
+keeps the last 14 dumps. `scripts/db-backup-now.sh` takes one on demand and
+`scripts/db-restore.sh --list` lists them.
+
+Those dumps stay on a volume in the same cluster, so copy them out about once a
+week. `scripts/db-backup-fetch.sh` copies the newest dump to `local/db-dumps/`
+(add `--all` for every dump), and you move it to your backup storage from there.
 
 ### Restore
 
@@ -123,32 +130,37 @@ scripts/db-restore.sh --list
 scripts/db-restore.sh --file latest            # or --file grafana-YYYYmmdd-HHMMSS.dump
 ```
 
-Grafana is stopped during the restore (a few minutes) and restarted after.
+The script stops Grafana for the few minutes the restore takes and starts it
+again afterwards.
 
-### Rollback of a deployment
+### Roll back a deployment
 
 ```bash
 scripts/install.sh --rollback
 ```
 
-Rolls back the Helm release to the previous revision and re-applies the
-platform objects saved before the last `--apply`. A database schema migration
-is not rolled back: restore the backup taken before the upgrade if needed.
+This returns the Helm release to its previous revision and re-applies the
+platform objects saved before the last `--apply`. It does not undo a database
+schema migration. If an upgrade migrated the schema, restore the backup you took
+before it.
 
 ### Admin password
 
-Read: `oc -n <ns> get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo`
-Change: in Grafana (Administration > Users > admin), then update the secret to
-match. The secret is only read when the admin user is first created.
+To read it, run
+`oc -n <ns> get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo`.
+
+To change it, use Grafana (Administration > Users > admin) and then update the
+secret to match. Grafana reads the secret only when it first creates the admin
+user.
 
 ## Cutover from the old instance
 
-1. Freeze changes on the old Grafana (announce it).
-2. Export again (`export-grafana.sh`) and import with `--overwrite`.
-3. Point users to the new URL (or move the old route host to the new route).
-4. Keep the old instance stopped but not deleted for two weeks: rollback = scale
-   it back up and move the route back.
-5. Decommission: delete the old namespace content after the retention period.
+1. Announce a change freeze on the old Grafana.
+2. Run `export-grafana.sh` again and import with `--overwrite`.
+3. Send users to the new URL, or move the old route host to the new route.
+4. Stop the old instance but keep it for two weeks. To roll back during that
+   time, scale it up again and move the route back.
+5. After those two weeks, delete what is left in the old namespace.
 
 ## Uninstall
 
