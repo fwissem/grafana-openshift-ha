@@ -12,10 +12,11 @@
 #   Kubernetes API : https://127.0.0.1:6445
 #   Grafana        : http://localhost:3300 (NodePort 30300)
 #
-# Plugins: the data-zone workers share one folder of the Podman machine
-# (/var/lib/grafana-ha-plugins, created by run-test.ps1), mounted at
-# /shared/grafana-plugins. A hostPath PersistentVolume on it plays the role of
-# the ReadWriteMany volume grafana-plugins used on OpenShift.
+# Plugins: the data-zone workers share one Windows folder (tests\local\out\
+# shared-plugins), mounted at /shared/grafana-plugins. A hostPath
+# PersistentVolume on it plays the role of the ReadWriteMany volume
+# grafana-plugins used on OpenShift. kind needs an absolute path, so run-test.ps1
+# writes a copy of this file with __SHARED_PLUGINS_DIR__ replaced.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: grafana-ha
@@ -40,25 +41,25 @@ nodes:
     labels:
       topology.kubernetes.io/zone: zone-a
     extraMounts:
-      - hostPath: /var/lib/grafana-ha-plugins
+      - hostPath: "__SHARED_PLUGINS_DIR__"
         containerPath: /shared/grafana-plugins
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-a
     extraMounts:
-      - hostPath: /var/lib/grafana-ha-plugins
+      - hostPath: "__SHARED_PLUGINS_DIR__"
         containerPath: /shared/grafana-plugins
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-b
     extraMounts:
-      - hostPath: /var/lib/grafana-ha-plugins
+      - hostPath: "__SHARED_PLUGINS_DIR__"
         containerPath: /shared/grafana-plugins
   - role: worker
     labels:
       topology.kubernetes.io/zone: zone-b
     extraMounts:
-      - hostPath: /var/lib/grafana-ha-plugins
+      - hostPath: "__SHARED_PLUGINS_DIR__"
         containerPath: /shared/grafana-plugins
   - role: worker
     labels:

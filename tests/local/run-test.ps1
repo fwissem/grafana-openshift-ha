@@ -390,10 +390,15 @@ if (-not (Test-Path $chartYaml) -or -not (Select-String -Path $chartYaml -Patter
 if (-not $SkipDeploy) {
     $clusters = (Exec 'kind' @('get', 'clusters')).Out
     $exists = ($clusters -split "`n" | ForEach-Object { $_.Trim() }) -contains $Cluster
-    # The data-zone workers mount a shared folder of the Podman machine for the
-    # plugins volume (kind-config.yaml extraMounts). A cluster created before
-    # that has no such mount: recreate it.
-    Exec 'podman' @('machine', 'ssh', 'sudo mkdir -p /var/lib/grafana-ha-plugins && sudo chmod 0777 /var/lib/grafana-ha-plugins') | Out-Null
+    # The data-zone workers mount a shared Windows folder for the plugins volume
+    # (kind-config.yaml extraMounts; Podman maps D:\ to /mnt/d in its machine).
+    # kind needs an absolute path: write a copy of the config with it. A cluster
+    # created before that has no such mount: recreate it.
+    $sharedDir = Join-Path $Out 'shared-plugins'
+    New-Item -ItemType Directory -Force -Path $sharedDir | Out-Null
+    $kindConfig = Join-Path $Out 'kind-config.generated.yaml'
+    (Get-Content -Raw (Join-Path $PSScriptRoot 'kind-config.yaml')).Replace('__SHARED_PLUGINS_DIR__', $sharedDir.Replace('\', '/')) |
+        Set-Content -Path $kindConfig -Encoding ASCII
     if ($exists -and -not $Recreate) {
         $m = Exec 'podman' @('exec', "$Cluster-worker", 'test', '-d', '/shared/grafana-plugins')
         if ($m.Code -ne 0) { Log 'The kind cluster has no shared plugins folder (created by an older version): recreating it'; $Recreate = $true }
@@ -436,7 +441,7 @@ if (-not $SkipDeploy) {
         Log "Creating kind cluster $Cluster (1 control plane, 2+2 workers in data zones, 1 in the quorum zone). First run downloads the node image."
         $created = $false
         for ($attempt = 1; $attempt -le 5 -and -not $created; $attempt++) {
-            $r = Exec 'kind' @('create', 'cluster', '--config', (Join-Path $PSScriptRoot 'kind-config.yaml'), '--wait', '5m')
+            $r = Exec 'kind' @('create', 'cluster', '--config', $kindConfig, '--wait', '5m')
             if ($r.Code -eq 0) { $created = $true; break }
             Log "kind create cluster failed (attempt $attempt/5); collecting Podman diagnostics and retrying."
             Exec 'podman' @('ps', '-a') | Out-Null
