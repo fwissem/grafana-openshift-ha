@@ -48,7 +48,7 @@ follows its volume.
 | Event | Effect on users | Recovery |
 |---|---|---|
 | One Grafana pod killed | Nothing measurable. The test saw 0 failed requests out of 458. | The Deployment replaces it within seconds. |
-| All Grafana pods deleted at once | Grafana is down until the first new pod is ready, about 20 seconds. | The content survives because it lives in PostgreSQL. |
+| All Grafana pods deleted at once | Grafana is down until the first new pod is ready, about 20 seconds. Replicas that start in the same second compete for Grafana's startup locks (schema migration, default roles). The one that wins starts, and the others exit and are restarted by Kubernetes about 10 seconds later, so some pods show one restart. | The content survives because it lives in PostgreSQL. |
 | One node lost | The other 3 replicas serve while the lost one starts elsewhere. | Automatic. |
 | One data zone lost | The 2 replicas in the other zone keep serving, and the lost ones start again in that zone. Draining a zone in the test gave 0 failed requests out of 607. | Automatic. The replicas spread out again when the zone comes back. |
 | PostgreSQL node lost | Grafana returns errors until PostgreSQL restarts on another node. That takes 1 to 2 minutes, plus up to 5 minutes for Kubernetes to declare the node lost. | Automatic, and the replicated volume keeps the data. |
