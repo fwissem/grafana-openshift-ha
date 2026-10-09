@@ -162,7 +162,7 @@ ocn cp "$SRC" "$POD:/plugins/.new-$HASH" >/dev/null || die "oc cp to the loader 
 ocn exec "$POD" -- sh -c "
   set -e
   cd /plugins
-  chmod -R a+rX .new-$HASH
+  chmod -R a+rX .new-$HASH 2>/dev/null || echo 'warning: chmod refused by the volume; files keep the mode set by oc cp' >&2
   rm -rf live.old
   if [ -d live ]; then mv live live.old; fi
   mv .new-$HASH live

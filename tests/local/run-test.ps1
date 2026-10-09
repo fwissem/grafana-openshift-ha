@@ -247,11 +247,14 @@ spec:
     if ($r.Code -ne 0) { Log "ERROR: loader pod: $($r.Out)"; return $false }
     $r = K @('wait', '--for=condition=Ready', "pod/$pod", '--timeout=300s')
     if ($r.Code -ne 0) { Log 'ERROR: loader pod not ready'; return $false }
+    # A leftover from an interrupted run would make kubectl cp nest the copy.
+    K @('exec', $pod, '--', 'rm', '-rf', "/plugins/.new-$hash") | Out-Null
     # kubectl cp reads "D:" as a pod name: copy with a relative path.
     Push-Location $work
     try { $r = K @('cp', 'new', "${pod}:/plugins/.new-$hash") } finally { Pop-Location }
     if ($r.Code -ne 0) { Log "ERROR: kubectl cp failed: $($r.Out)"; K @('delete', 'pod', $pod, '--wait=false') | Out-Null; return $false }
-    $switch = "set -e; cd /plugins; chmod -R a+rX .new-$hash; rm -rf live.old; if [ -d live ]; then mv live live.old; fi; mv .new-$hash live; echo $hash > live.hash.tmp; mv live.hash.tmp live.hash; ls live"
+    # chmod is refused on the Windows folder used locally, where files are readable anyway.
+    $switch = "set -e; cd /plugins; chmod -R a+rX .new-$hash 2>/dev/null || true; rm -rf live.old; if [ -d live ]; then mv live live.old; fi; mv .new-$hash live; echo $hash > live.hash.tmp; mv live.hash.tmp live.hash; ls live"
     $r = K @('exec', $pod, '--', 'sh', '-c', $switch)
     K @('delete', 'pod', $pod, '--wait=false') | Out-Null
     if ($r.Code -ne 0) { Log "ERROR: could not switch the plugin set: $($r.Out)"; return $false }
